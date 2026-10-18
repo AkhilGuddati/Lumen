@@ -1,6 +1,6 @@
 # Lumen
 
-Dark, controller-friendly WPF game launcher with hero art, a corner trailer, and per-game media.
+A Simple, Clean and Elegant Game Launcher
 
 ## Features
 
