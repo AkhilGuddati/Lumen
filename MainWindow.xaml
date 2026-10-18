@@ -1,0 +1,412 @@
+<Window x:Class="Lumen.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Lumen" Width="1280" Height="780" MinWidth="900" MinHeight="600"
+        Icon="/lumen.ico"
+        WindowStartupLocation="CenterScreen" Background="Transparent" UseLayoutRounding="True"
+        FontFamily="Segoe UI Variable Text, Segoe UI">
+
+    <Window.Resources>
+        <Style x:Key="Icon" TargetType="Button">
+            <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets"/>
+            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="Width" Value="40"/>
+            <Setter Property="Height" Value="40"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Foreground" Value="{DynamicResource Fg}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="b" CornerRadius="20" Background="{DynamicResource Glass}"
+                                BorderBrush="{DynamicResource GlassLine}" BorderThickness="1" Opacity=".85">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="b" Property="Opacity" Value="1"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="Pill" TargetType="Button">
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="HorizontalAlignment" Value="Left"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <!-- The theme accent as before: faint at rest, more solid the more active it gets. -->
+                        <Border x:Name="b" CornerRadius="8" Background="{DynamicResource PlayAccent}" Padding="30,11">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="b" Property="Background" Value="{DynamicResource PlayAccentHover}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="b" Property="Background" Value="{DynamicResource PlayAccentDown}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="StatV" TargetType="TextBlock">
+            <!-- Sized/weighted like the metadata values so the play time reads as part of the metadata -->
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Foreground" Value="{DynamicResource Fg}"/>
+        </Style>
+        <Style x:Key="StatL" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="{DynamicResource FgDim}"/>
+        </Style>
+
+        <Style TargetType="ListBoxItem">
+            <Setter Property="Margin" Value="5,0"/>
+            <Setter Property="Height" Value="222"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <!-- The tile keeps its slot: the selected game is simply bigger, and hovering a
+                             not-yet-selected one pops it the same way, so neither pushes its
+                             neighbours along. -->
+                        <Border x:Name="B" CornerRadius="13" BorderThickness="3" BorderBrush="Transparent"
+                                VerticalAlignment="Bottom" RenderTransformOrigin="0.5,1">
+                            <Border.RenderTransform>
+                                <TransformGroup>
+                                    <ScaleTransform x:Name="Pop"/>
+                                    <ScaleTransform x:Name="Sel"/>
+                                </TransformGroup>
+                            </Border.RenderTransform>
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter Property="Panel.ZIndex" Value="10"/>
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="Sel" Storyboard.TargetProperty="ScaleX"
+                                                             To="1.07" Duration="0:0:0.2"/>
+                                            <DoubleAnimation Storyboard.TargetName="Sel" Storyboard.TargetProperty="ScaleY"
+                                                             To="1.07" Duration="0:0:0.2"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.EnterActions>
+                                <Trigger.ExitActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="Sel" Storyboard.TargetProperty="ScaleX"
+                                                             To="1" Duration="0:0:0.2"/>
+                                            <DoubleAnimation Storyboard.TargetName="Sel" Storyboard.TargetProperty="ScaleY"
+                                                             To="1" Duration="0:0:0.2"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.ExitActions>
+                            </Trigger>
+                            <!-- Hover pop, but only while the tile is not the selected one, so hovering the
+                                 selection never scales it further (which would push it over the pane's top). -->
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsMouseOver" Value="True"/>
+                                    <Condition Property="IsSelected" Value="False"/>
+                                </MultiTrigger.Conditions>
+                                <Setter Property="Panel.ZIndex" Value="10"/>
+                                <MultiTrigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="Pop" Storyboard.TargetProperty="ScaleX"
+                                                             To="1.05" Duration="0:0:0.15"/>
+                                            <DoubleAnimation Storyboard.TargetName="Pop" Storyboard.TargetProperty="ScaleY"
+                                                             To="1.05" Duration="0:0:0.15"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </MultiTrigger.EnterActions>
+                                <MultiTrigger.ExitActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="Pop" Storyboard.TargetProperty="ScaleX"
+                                                             To="1" Duration="0:0:0.18"/>
+                                            <DoubleAnimation Storyboard.TargetName="Pop" Storyboard.TargetProperty="ScaleY"
+                                                             To="1" Duration="0:0:0.18"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </MultiTrigger.ExitActions>
+                            </MultiTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <DataTemplate x:Key="Cover">
+            <Grid x:Name="Root" Width="132" Height="198" Background="Transparent"
+                  PreviewMouseRightButtonDown="Cover_Right" MouseLeftButtonDown="Cover_Down">
+                <Rectangle RadiusX="10" RadiusY="10" Fill="{DynamicResource Card}"/>
+                <Rectangle RadiusX="10" RadiusY="10">
+                    <Rectangle.Fill>
+                        <ImageBrush ImageSource="{Binding Grid}" Stretch="UniformToFill"/>
+                    </Rectangle.Fill>
+                </Rectangle>
+                <TextBlock Text="{Binding Name}" TextWrapping="Wrap" TextAlignment="Center" VerticalAlignment="Center"
+                           Margin="12" FontWeight="SemiBold" Foreground="{DynamicResource Fg}">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding NoGrid}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+                <Border HorizontalAlignment="Left" VerticalAlignment="Top" Margin="7" Width="26" Height="26" CornerRadius="13"
+                        Background="#CC000000">
+                    <TextBlock Text="&#xE735;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="13"
+                               Foreground="#FFFFC83D" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Favorite}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                </Border>
+            </Grid>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Grid x:Name="Page" Opacity="0">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Hero -->
+        <Grid x:Name="HeroGrid" Grid.Row="0" ClipToBounds="True">
+            <Image x:Name="Hero" Stretch="UniformToFill"/>
+            <Image x:Name="Hero2" Stretch="UniformToFill" Opacity="0"/>
+            <Border x:Name="ScrimH" IsHitTestVisible="False"/>
+            <Border x:Name="ScrimV" IsHitTestVisible="False"/>
+
+            <StackPanel x:Name="InfoPanel" VerticalAlignment="Bottom" HorizontalAlignment="Left" Margin="56,0,0,36">
+                <StackPanel.RenderTransform>
+                    <TranslateTransform x:Name="InfoTr"/>
+                </StackPanel.RenderTransform>
+                <!-- Title: fixed-size box; the logo (or the game's name, when there is no logo) is
+                     scaled to fit inside it, so every game's title occupies the same space and never
+                     spills over. -->
+                <Grid x:Name="TitleBox" MaxWidth="420" Height="96" HorizontalAlignment="Left" Margin="0,0,0,4">
+                    <Viewbox Stretch="Uniform" StretchDirection="DownOnly"
+                             HorizontalAlignment="Left" VerticalAlignment="Bottom" MaxWidth="420">
+                        <StackPanel>
+                            <Image x:Name="Logo" MaxWidth="380" MaxHeight="110" HorizontalAlignment="Left" Stretch="Uniform"/>
+                            <TextBlock x:Name="TitleText" FontSize="40" FontWeight="SemiBold" TextWrapping="Wrap" MaxWidth="380"
+                                       FontFamily="Segoe UI Variable Display, Segoe UI" Foreground="{DynamicResource Fg}"/>
+                        </StackPanel>
+                    </Viewbox>
+                </Grid>
+
+                <!-- Extra HowLongToBeat details: play time, then two metadata columns, the description
+                     filling the last column, and "additional content" (DLC) spanning the metadata columns last -->
+                <Grid x:Name="MetaCard" Margin="20,0,0,18" Visibility="Collapsed" HorizontalAlignment="Left">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- play time: first metadata row, so the description can start level with it -->
+                    <StackPanel x:Name="TimeRow" Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
+                                Orientation="Horizontal" Margin="0,0,24,10">
+                        <StackPanel Margin="0,0,40,0">
+                            <TextBlock Text="Main story" Style="{StaticResource StatL}"/>
+                            <TextBlock x:Name="StatMain" Style="{StaticResource StatV}"/>
+                        </StackPanel>
+                        <StackPanel Margin="0,0,40,0">
+                            <TextBlock Text="Main + extras" Style="{StaticResource StatL}"/>
+                            <TextBlock x:Name="StatExtra" Style="{StaticResource StatV}"/>
+                        </StackPanel>
+                        <StackPanel Margin="0,0,0,0">
+                            <TextBlock Text="Completionist" Style="{StaticResource StatL}"/>
+                            <TextBlock x:Name="StatFull" Style="{StaticResource StatV}"/>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <StackPanel x:Name="MetaGenresRow" Grid.Row="1" Grid.Column="0" Margin="0,0,24,7">
+                        <TextBlock Text="Genres" Style="{StaticResource StatL}"/>
+                        <TextBlock x:Name="MetaGenres" FontSize="13" TextWrapping="Wrap" Foreground="{DynamicResource Fg}"/>
+                    </StackPanel>
+                    <StackPanel x:Name="MetaDevRow" Grid.Row="1" Grid.Column="1" Margin="0,0,0,7">
+                        <TextBlock Text="Developer" Style="{StaticResource StatL}"/>
+                        <TextBlock x:Name="MetaDev" FontSize="13" TextWrapping="Wrap" Foreground="{DynamicResource Fg}"/>
+                    </StackPanel>
+                    <StackPanel x:Name="MetaPubRow" Grid.Row="2" Grid.Column="0" Margin="0,0,24,0">
+                        <TextBlock Text="Publisher" Style="{StaticResource StatL}"/>
+                        <TextBlock x:Name="MetaPub" FontSize="13" TextWrapping="Wrap" Foreground="{DynamicResource Fg}"/>
+                    </StackPanel>
+                    <StackPanel x:Name="MetaReleaseRow" Grid.Row="2" Grid.Column="1">
+                        <TextBlock Text="Release" Style="{StaticResource StatL}"/>
+                        <TextBlock x:Name="MetaRelease" FontSize="13" TextWrapping="Wrap" Foreground="{DynamicResource Fg}"/>
+                    </StackPanel>
+
+                    <!-- description: its own last column, starting level with the play time. The box is a
+                         fixed size for every game and every window size (7 lines); anything longer scrolls
+                         inside it, and the scrollbar only appears when there is more text than fits.
+                         The right padding keeps the text clear of that scrollbar. -->
+                    <ScrollViewer x:Name="DescCard" Grid.Row="0" Grid.Column="2" Grid.RowSpan="4"
+                                  Margin="20,0,0,0" Width="340" Height="140" VerticalAlignment="Top"
+                                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                                  Padding="0,0,16,0">
+                        <TextBlock x:Name="DescText" TextWrapping="Wrap" FontSize="13" LineHeight="20"
+                                   LineStackingStrategy="BlockLineHeight" Foreground="{DynamicResource FgDim}"/>
+                    </ScrollViewer>
+
+                    <StackPanel x:Name="DlcBlock" Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2"
+                                Grid.IsSharedSizeScope="True"
+                                Margin="0,10,0,0" Visibility="Collapsed">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" SharedSizeGroup="DlcName"/>
+                                <ColumnDefinition Width="Auto" MinWidth="48" SharedSizeGroup="DlcMain"/>
+                                <ColumnDefinition Width="Auto" MinWidth="48" SharedSizeGroup="DlcExtra"/>
+                                <ColumnDefinition Width="Auto" MinWidth="48" SharedSizeGroup="DlcFull"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Additional Content" FontSize="11" Margin="0,0,10,0"
+                                       MaxWidth="180" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource FgDim}"/>
+                            <TextBlock Grid.Column="1" Text="Main" FontSize="11" HorizontalAlignment="Left"
+                                       Foreground="{DynamicResource FgDim}"/>
+                            <TextBlock Grid.Column="2" Text="Main+" FontSize="11" HorizontalAlignment="Left"
+                                       Foreground="{DynamicResource FgDim}"/>
+                            <TextBlock Grid.Column="3" Text="100%" FontSize="11" HorizontalAlignment="Left"
+                                       Foreground="{DynamicResource FgDim}"/>
+                        </Grid>
+                        <ItemsControl x:Name="DlcList">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="0,3,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" SharedSizeGroup="DlcName"/>
+                                            <ColumnDefinition Width="Auto" MinWidth="48" SharedSizeGroup="DlcMain"/>
+                                            <ColumnDefinition Width="Auto" MinWidth="48" SharedSizeGroup="DlcExtra"/>
+                                            <ColumnDefinition Width="Auto" MinWidth="48" SharedSizeGroup="DlcFull"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="12" Margin="0,0,10,0"
+                                                   MaxWidth="180" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource Fg}"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding MainH}" FontSize="12"
+                                                   HorizontalAlignment="Left" Foreground="{DynamicResource Fg}"/>
+                                        <TextBlock Grid.Column="2" Text="{Binding ExtraH}" FontSize="12"
+                                                   HorizontalAlignment="Left" Foreground="{DynamicResource Fg}"/>
+                                        <TextBlock Grid.Column="3" Text="{Binding FullH}" FontSize="12"
+                                                   HorizontalAlignment="Left" Foreground="{DynamicResource Fg}"/>
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Grid>
+                <Button x:Name="PlayBtn" Style="{StaticResource Pill}" Click="Play_Click">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Text="&#xE768;" Margin="0,2,10,0"/>
+                        <TextBlock x:Name="PlayLabel" Text="Play"/>
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+
+            <!-- Status + controller hint -->
+            <StackPanel HorizontalAlignment="Left" VerticalAlignment="Top" Margin="56,24,0,0">
+                <TextBlock x:Name="Status" FontSize="13" Foreground="{DynamicResource FgDim}"/>
+                <TextBlock x:Name="PadHint" FontSize="13" Margin="0,4,0,0" Visibility="Collapsed"
+                           Text="&#x25C0; &#x25B6; Browse    &#x25B2; &#x25BC; Description    START Play    A Play Trailer    Y Show Trailer    X Mute Trailer    B Back"
+                           Foreground="{DynamicResource FgDim}"/>
+            </StackPanel>
+
+            <!-- Top-right buttons -->
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,20,24,0">
+                <Button x:Name="TrBtn" Style="{StaticResource Icon}" Content="&#xE714;" ToolTip="Show trailer (Y)"
+                        Click="TrailerBox_Click" Margin="0,0,8,0"/>
+                <Button x:Name="FsBtn" Style="{StaticResource Icon}" Content="&#xE740;" ToolTip="Fullscreen (F11)"
+                        Click="Full_Click" Margin="0,0,8,0"/>
+                <Button Style="{StaticResource Icon}" Content="&#xE710;" ToolTip="Add game" Click="Add_Click" Margin="0,0,8,0"/>
+                <Button Style="{StaticResource Icon}" Content="&#xE713;" ToolTip="Settings (SteamGridDB key)" Click="Settings_Click"/>
+            </StackPanel>
+
+            <!-- Trailer corner window -->
+            <Border x:Name="TrailerBox" Width="352" Height="198" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                    Margin="0,0,40,28" CornerRadius="12" Background="#CC000000" Visibility="Collapsed"
+                    RenderTransformOrigin="1,1">
+                <Border.RenderTransform>
+                    <ScaleTransform x:Name="TrailerScale"/>
+                </Border.RenderTransform>
+                <Grid>
+                    <MediaElement x:Name="Trailer" LoadedBehavior="Manual" UnloadedBehavior="Manual" ScrubbingEnabled="True"
+                                  Stretch="UniformToFill" Volume="0" MediaOpened="Trailer_Opened" MediaEnded="Trailer_Ended"
+                                  MouseLeftButtonUp="Trailer_Click"/>
+                    <Button x:Name="BigPlay" Style="{StaticResource Icon}" Width="56" Height="56" FontSize="22"
+                            Content="&#xE768;" HorizontalAlignment="Center" VerticalAlignment="Center"
+                            ToolTip="Play trailer" Click="TrailerToggle_Click"/>
+                    <Button x:Name="MuteBtn" Style="{StaticResource Icon}" Width="32" Height="32" FontSize="13"
+                            HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,8,8"
+                            Content="&#xE767;" ToolTip="Mute / unmute trailer" Click="Mute_Click"/>
+                </Grid>
+            </Border>
+
+            <TextBlock x:Name="Hint" Text="Press + to add your first game" FontSize="20" Visibility="Collapsed"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource FgDim}"/>
+        </Grid>
+
+        <!-- Shelf: the plain tinted pane, with a faint glow in the artwork's own colour pooling
+             along its top edge. -->
+        <Border x:Name="Shelf" Grid.Row="1" Padding="40,0,40,22" ClipToBounds="True"
+                BorderBrush="{DynamicResource GlassLine}" BorderThickness="0,1,0,0">
+            <Grid>
+                <Rectangle x:Name="Glow" IsHitTestVisible="False" VerticalAlignment="Top"
+                           Height="130" Margin="-40,0,-40,0"/>
+                <ListBox x:Name="List" Background="Transparent" BorderThickness="0"
+                         ItemTemplate="{StaticResource Cover}"
+                         ScrollViewer.HorizontalScrollBarVisibility="Hidden"
+                         ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                         ScrollViewer.CanContentScroll="False"
+                         SelectionChanged="List_Sel" PreviewMouseWheel="List_Wheel" KeyDown="List_Key"
+                         ContextMenuOpening="List_Menu">
+                    <ListBox.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal"/>
+                        </ItemsPanelTemplate>
+                    </ListBox.ItemsPanel>
+                    <ListBox.ContextMenu>
+                        <ContextMenu>
+                            <MenuItem Header="Play" Click="Play_Click"/>
+                            <MenuItem Header="Add to favorites" Tag="fav" Click="Fav_Click"/>
+                            <MenuItem Header="Edit…" Click="Edit_Click"/>
+                            <MenuItem Header="Paste art link…" Click="ArtLink_Click"/>
+                            <MenuItem Header="Set theme music…" Click="ThemeFile_Click"/>
+                            <MenuItem Header="Re-download artwork, trailer &amp; music" Click="Refresh_Click"/>
+                            <Separator/>
+                            <MenuItem Header="Remove" Click="Remove_Click"/>
+                        </ContextMenu>
+                    </ListBox.ContextMenu>
+                </ListBox>
+            </Grid>
+        </Border>
+
+        <MediaElement x:Name="Music" Grid.Row="1" Width="0" Height="0" LoadedBehavior="Manual"
+                      UnloadedBehavior="Manual" Volume="0" MediaEnded="Music_Ended" MediaFailed="Music_Failed"/>
+    </Grid>
+</Window>

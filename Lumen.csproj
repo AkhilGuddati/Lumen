@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Lumen</AssemblyName>
+    <RootNamespace>Lumen</RootNamespace>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <!-- App icon (exe, taskbar, Explorer): a glowing "L" for lumen. -->
+    <ApplicationIcon>lumen.ico</ApplicationIcon>
+  </PropertyGroup>
+  <ItemGroup>
+    <Using Include="System.Net.Http" />
+    <Using Include="System.IO" />
+    <Using Include="System.Linq" />
+    <Using Include="System.Threading.Tasks" />
+    <Using Include="System.Collections.Generic" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Also embedded as a WPF resource so the window/taskbar can use the same file. -->
+    <Resource Include="lumen.ico" />
+  </ItemGroup>
+</Project>

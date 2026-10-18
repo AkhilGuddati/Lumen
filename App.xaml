@@ -1,0 +1,75 @@
+<Application x:Class="Lumen.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             StartupUri="MainWindow.xaml">
+    <Application.Resources>
+
+        <!-- Invisible track buttons (click-to-page still works) -->
+        <Style x:Key="ScrollPage" TargetType="RepeatButton">
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="IsTabStop" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RepeatButton">
+                        <Border Background="Transparent"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Rounded translucent thumb that follows the Windows theme (Fg colour) -->
+        <Style x:Key="ScrollThumb" TargetType="Thumb">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Thumb">
+                        <Border x:Name="T" CornerRadius="4" Background="{DynamicResource Fg}" Opacity=".28"
+                                Margin="2"/>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="T" Property="Opacity" Value=".5"/>
+                            </Trigger>
+                            <Trigger Property="IsDragging" Value="True">
+                                <Setter TargetName="T" Property="Opacity" Value=".7"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="ScrollBar">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Width" Value="10"/>
+            <Setter Property="MinWidth" Value="10"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid x:Name="Root" Background="Transparent">
+                            <Track x:Name="PART_Track" IsDirectionReversed="True">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageUpCommand" Style="{StaticResource ScrollPage}"/>
+                                </Track.DecreaseRepeatButton>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageDownCommand" Style="{StaticResource ScrollPage}"/>
+                                </Track.IncreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Style="{StaticResource ScrollThumb}"/>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="Orientation" Value="Horizontal">
+                                <Setter Property="Width" Value="Auto"/>
+                                <Setter Property="MinWidth" Value="0"/>
+                                <Setter Property="Height" Value="10"/>
+                                <Setter Property="MinHeight" Value="10"/>
+                                <Setter TargetName="PART_Track" Property="IsDirectionReversed" Value="False"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+    </Application.Resources>
+</Application>
