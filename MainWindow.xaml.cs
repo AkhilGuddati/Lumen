@@ -74,6 +74,7 @@ public partial class MainWindow : Window
         };
 
         SizeChanged += (_, _) => SizeTrailer();
+        InfoPanel.SizeChanged += (_, _) => SizeTrailer();
         // the real sizes only settle after layout (and change with the interface scale), so re-fit on those too
         Page.SizeChanged += (_, _) => SizeTrailer();
         HeroGrid.SizeChanged += (_, _) => SizeTrailer();
@@ -377,16 +378,37 @@ public partial class MainWindow : Window
         double h = w * 9 / 16;
         TrailerBox.Width = w;
         TrailerBox.Height = h;
+        TrailerSlot.Width = w;
+        TrailerSlot.Height = h;
         TrailerBox.Clip = new RectangleGeometry(new Rect(0, 0, w, h), 12, 12);
 
         // Nothing may overlap: the info block (left) is shrunk to fit beside the trailer (right), below the top
         // buttons / status line and above the shelf. `pw` / `hh` are layout units, so this holds at any UI scale.
-        bool trailerOn = trailerShown && TrailerBox.Visibility == Visibility.Visible;
-        double right = trailerOn ? pw - 40 - w - 32 : pw - 24;       // right-hand limit of the info block
+        double right = pw - 40 - w - 32;                              // right-hand limit: the trailer's slot is always reserved
         double hh = HeroGrid.ActualHeight > 0 ? HeroGrid.ActualHeight : heroH;
         InfoFit.MaxWidth = Math.Max(200, right - 56);                 // 56 = its left margin
         InfoFit.MaxHeight = Math.Max(90, hh - 36 - 84);               // 36 bottom margin, 84 = top buttons / status line
         StatusPanel.MaxWidth = Math.Max(160, pw - 56 - 216);          // stays clear of the top-right buttons
+
+        // The "additional content" list takes whatever height the rest of the block leaves, and scrolls beyond
+        // that, so the block can never grow past the shelf. Sizes are in layout units (text scale `t` included).
+        double t = Store.Settings.TextScale <= 0 ? 1.0 : Store.Settings.TextScale;
+        double title = TitleBox.ActualHeight;
+        double others = InfoPanel.ActualHeight - DlcScroll.ActualHeight * t - title;   // everything except title and DLC list
+        // keep room for a readable logo (110 + its 18 gap); the list scrolls inside what is left
+        DlcScroll.MaxHeight = Math.Max(40, (InfoFit.MaxHeight - others - 128) / t);
+
+        // The logo gets whatever height the rest of the block leaves, so it scales down instead of being cut off.
+        double rest = InfoPanel.ActualHeight - title;                                 // includes the title's 18 gap
+        logoMaxH = Math.Max(60, InfoFit.MaxHeight - rest);
+        FitLogo();
+
+        // The description column takes the width left beside the metadata (up to 340), so its text is never
+        // cut off at the right edge; the text just wraps onto more lines inside its fixed-height box.
+        double colsW = MetaCard.ColumnDefinitions[0].ActualWidth + MetaCard.ColumnDefinitions[1].ActualWidth;
+        double availW = (InfoFit.MaxWidth - MetaCard.Margin.Left) / t - colsW - DescCard.Margin.Left;
+        double dw = Math.Clamp(availW, 160, 340);
+        if (Math.Abs(DescCard.Width - dw) > .5) DescCard.Width = dw;
     }
 
     // UI scale: the page lays out in a smaller coordinate space and the transform scales it back up
@@ -448,16 +470,23 @@ public partial class MainWindow : Window
         Hint.Visibility = games.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    // Sizes the logo to fill the title area (up to 420 x 240) while keeping its aspect ratio. Without an
-    // explicit size the image stays at its natural pixel size, so small or squarish logos never grew.
-    void FitLogo(ImageSource? img)
+    // Sizes the logo to fill the title area (up to 420 x 240) while keeping its aspect ratio. It scales
+    // down further when the rest of the info block leaves less height (logoMaxH, set in SizeTrailer), so it
+    // is never cut off. Without an explicit size the image would stay at its natural pixel size.
+    double logoMaxH = 240;
+    void FitLogo()
     {
-        const double maxW = 420, maxH = 240;
+        const double maxW = 420;
+        var img = Logo.Source;
         if (img is null || img.Width <= 0 || img.Height <= 0) { Logo.ClearValue(WidthProperty); Logo.ClearValue(HeightProperty); return; }
         double aspect = img.Width / img.Height;
-        double w = Math.Min(maxW, maxH * aspect);
-        Logo.Width = w;
-        Logo.Height = w / aspect;
+        double w = Math.Min(maxW, Math.Min(240, logoMaxH) * aspect);
+        double h = w / aspect;
+        if (double.IsNaN(Logo.Width) || Math.Abs(Logo.Width - w) > .5 || Math.Abs(Logo.Height - h) > .5)
+        {
+            Logo.Width = w;
+            Logo.Height = h;
+        }
     }
 
     void Render(Game g, bool animate)
@@ -468,7 +497,7 @@ public partial class MainWindow : Window
         var logoImg = LogoImg(g.Logo);
         Logo.Source = logoImg;
         Logo.Visibility = logoImg is null ? Visibility.Collapsed : Visibility.Visible;
-        FitLogo(logoImg);
+        FitLogo();
         TitleText.Text = g.Name;
         TitleText.Visibility = Logo.Source is null ? Visibility.Visible : Visibility.Collapsed;
         bool wait = busy.Contains(g.Id) && g.Main <= 0;
@@ -496,6 +525,7 @@ public partial class MainWindow : Window
             Status.Text = string.Join("    ", notes);
         }
         if (animate) AnimateInfo();
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(SizeTrailer));   // content changed: re-fit
     }
 
     // Genres / developer / publisher / release date in two columns; "additional content" (DLC) spans both below.
