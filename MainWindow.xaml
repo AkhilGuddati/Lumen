@@ -211,11 +211,11 @@
                 <!-- Title: fixed-size box; the logo (or the game's name, when there is no logo) is
                      scaled to fit inside it, so every game's title occupies the same space and never
                      spills over. -->
-                <Grid x:Name="TitleBox" MaxWidth="420" MaxHeight="150" HorizontalAlignment="Left" Margin="0,0,0,18">
+                <Grid x:Name="TitleBox" MaxWidth="440" MaxHeight="250" HorizontalAlignment="Left" Margin="0,0,0,18">
                     <Viewbox Stretch="Uniform" StretchDirection="DownOnly"
-                             HorizontalAlignment="Left" VerticalAlignment="Bottom" MaxWidth="420" MaxHeight="150">
+                             HorizontalAlignment="Left" VerticalAlignment="Bottom" MaxWidth="440" MaxHeight="250">
                         <StackPanel>
-                            <Image x:Name="Logo" MaxWidth="380" MaxHeight="150" HorizontalAlignment="Left" Stretch="Uniform"/>
+                            <Image x:Name="Logo" HorizontalAlignment="Left" Stretch="Uniform"/>
                             <TextBlock x:Name="TitleText" FontSize="40" FontWeight="SemiBold" TextWrapping="Wrap" MaxWidth="380"
                                        FontFamily="Segoe UI Variable Display, Segoe UI" Foreground="{DynamicResource Fg}"/>
                         </StackPanel>

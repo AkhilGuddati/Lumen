@@ -448,6 +448,18 @@ public partial class MainWindow : Window
         Hint.Visibility = games.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
+    // Sizes the logo to fill the title area (up to 420 x 240) while keeping its aspect ratio. Without an
+    // explicit size the image stays at its natural pixel size, so small or squarish logos never grew.
+    void FitLogo(ImageSource? img)
+    {
+        const double maxW = 420, maxH = 240;
+        if (img is null || img.Width <= 0 || img.Height <= 0) { Logo.ClearValue(WidthProperty); Logo.ClearValue(HeightProperty); return; }
+        double aspect = img.Width / img.Height;
+        double w = Math.Min(maxW, maxH * aspect);
+        Logo.Width = w;
+        Logo.Height = w / aspect;
+    }
+
     void Render(Game g, bool animate)
     {
         Hint.Visibility = Visibility.Collapsed;
@@ -456,6 +468,7 @@ public partial class MainWindow : Window
         var logoImg = LogoImg(g.Logo);
         Logo.Source = logoImg;
         Logo.Visibility = logoImg is null ? Visibility.Collapsed : Visibility.Visible;
+        FitLogo(logoImg);
         TitleText.Text = g.Name;
         TitleText.Visibility = Logo.Source is null ? Visibility.Visible : Visibility.Collapsed;
         bool wait = busy.Contains(g.Id) && g.Main <= 0;
