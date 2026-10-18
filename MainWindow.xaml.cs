@@ -394,8 +394,8 @@ public partial class MainWindow : Window
     void ApplyScale()
     {
         double s = Store.Settings.UiScale <= 0 ? 1.0 : Store.Settings.UiScale;
-        Page.LayoutTransform = new ScaleTransform(s, s);
-        SizeTrailer();
+        double t = Store.Settings.TextScale <= 0 ? 1.0 : Store.Settings.TextScale;
+        PreviewScale(s, t);
     }
 
     void ReleaseMedia()
@@ -1086,15 +1086,18 @@ public partial class MainWindow : Window
         if (Dialogs.AppSettings(this, PreviewScale) is not { } r) return;
         Store.Settings.SgdbKey = r.key;
         Store.Settings.UiScale = r.scale;
+        Store.Settings.TextScale = r.text;
         Store.Save();
         ApplyScale();
     }
 
-    // Live preview while the scale slider moves (not persisted until Save).
-    void PreviewScale(double s)
+    // Live preview while a scale slider moves (not persisted until Save). `t` scales the info text only.
+    void PreviewScale(double s, double t)
     {
         if (s <= 0) s = 1.0;
+        if (t <= 0) t = 1.0;
         Page.LayoutTransform = new ScaleTransform(s, s);
+        MetaCard.LayoutTransform = new ScaleTransform(t, t);
         SizeTrailer();
     }
 }

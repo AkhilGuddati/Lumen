@@ -107,6 +107,7 @@ public class Settings
     public string SgdbKey { get; set; } = "";
     public bool KeyAsked { get; set; }
     public double UiScale { get; set; } = 1.0;
+    public double TextScale { get; set; } = 1.0;   // info text size (play times, description, genres), on top of UiScale
 }
 
 public static class Store

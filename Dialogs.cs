@@ -152,8 +152,8 @@ public static class Dialogs
         return result;
     }
 
-    // SteamGridDB key + UI scale. `preview` (optional) shows the scale live while the slider moves.
-    public static (string key, double scale)? AppSettings(Window owner, Action<double>? preview = null)
+    // SteamGridDB key + UI scale + text size. `preview` (optional) shows both scales live while a slider moves.
+    public static (string key, double scale, double text)? AppSettings(Window owner, Action<double, double>? preview = null)
     {
         var w = new Window
         {
@@ -166,34 +166,42 @@ public static class Dialogs
 
         var key = new TextBox { Text = Store.Settings.SgdbKey, Padding = new Thickness(6, 5, 6, 5) };
         var start = Store.Settings.UiScale <= 0 ? 1.0 : Store.Settings.UiScale;
+        var startText = Store.Settings.TextScale <= 0 ? 1.0 : Store.Settings.TextScale;
 
-        var pct = new TextBlock
-        {
-            Text = $"{start:0%}", VerticalAlignment = VerticalAlignment.Center, MinWidth = 52,
-            HorizontalAlignment = HorizontalAlignment.Right, Opacity = .8
-        };
-        var slider = new Slider
-        {
-            Minimum = .6, Maximum = 1.6, Value = start, TickFrequency = .05, IsSnapToTickEnabled = true,
-            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0)
-        };
-        slider.ValueChanged += (_, _) =>
-        {
-            pct.Text = $"{slider.Value:0%}";
-            preview?.Invoke(slider.Value);
-        };
+        Slider? slider = null, textSlider = null;
+        void Changed() { if (slider != null && textSlider != null) preview?.Invoke(slider.Value, textSlider.Value); }
 
-        var scaleRow = new DockPanel();
-        DockPanel.SetDock(pct, Dock.Right);
-        scaleRow.Children.Add(pct);
-        scaleRow.Children.Add(slider);
+        DockPanel ScaleRow(double value, double min, double max, out Slider sl)
+        {
+            var pct = new TextBlock
+            {
+                Text = $"{value:0%}", VerticalAlignment = VerticalAlignment.Center, MinWidth = 52,
+                HorizontalAlignment = HorizontalAlignment.Right, Opacity = .8
+            };
+            var s = new Slider
+            {
+                Minimum = min, Maximum = max, Value = value, TickFrequency = .05, IsSnapToTickEnabled = true,
+                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0)
+            };
+            s.ValueChanged += (_, _) => { pct.Text = $"{s.Value:0%}"; Changed(); };
+            var row = new DockPanel();
+            DockPanel.SetDock(pct, Dock.Right);
+            row.Children.Add(pct);
+            row.Children.Add(s);
+            sl = s;
+            return row;
+        }
 
-        (string, double)? result = null;
+        var scaleRow = ScaleRow(start, .6, 1.6, out var sl1);
+        var textRow = ScaleRow(startText, .7, 1.6, out var sl2);
+        slider = sl1; textSlider = sl2;
+
+        (string, double, double)? result = null;
         var ok = new Button { Content = "Save", IsDefault = true, Width = 90, Padding = new Thickness(0, 6, 0, 6) };
-        ok.Click += (_, _) => { result = (key.Text.Trim(), slider.Value); w.DialogResult = true; };
+        ok.Click += (_, _) => { result = (key.Text.Trim(), slider.Value, textSlider.Value); w.DialogResult = true; };
         var cancel = new Button { Content = "Cancel", IsCancel = true, Width = 90, Padding = new Thickness(0, 6, 0, 6), Margin = new Thickness(0, 0, 8, 0) };
-        cancel.Click += (_, _) => preview?.Invoke(start);   // put the old scale back
-        w.Closed += (_, _) => { if (result is null) preview?.Invoke(start); };
+        cancel.Click += (_, _) => preview?.Invoke(start, startText);   // put the old sizes back
+        w.Closed += (_, _) => { if (result is null) preview?.Invoke(start, startText); };
 
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 22, 0, 0) };
         buttons.Children.Add(cancel);
@@ -206,6 +214,8 @@ public static class Dialogs
         root.Children.Add(key);
         root.Children.Add(L("Interface scale — makes everything bigger or smaller; useful on small screens."));
         root.Children.Add(scaleRow);
+        root.Children.Add(L("Text size — play times, genres, developer and description, on top of the interface scale. The same for every game."));
+        root.Children.Add(textRow);
         root.Children.Add(buttons);
         w.Content = new ScrollViewer { Content = root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         w.ShowDialog();

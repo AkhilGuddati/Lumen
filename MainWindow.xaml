@@ -199,10 +199,9 @@
             <Border x:Name="ScrimH" IsHitTestVisible="False"/>
             <Border x:Name="ScrimV" IsHitTestVisible="False"/>
 
-            <!-- InfoFit shrinks the whole info block to fit (it never overlaps): beside the trailer, under the top
-                 buttons / status line and above the shelf, at any window size or interface scale. Its limits are
-                 set in SizeTrailer(). -->
-            <Viewbox x:Name="InfoFit" Stretch="Uniform" StretchDirection="DownOnly" HorizontalAlignment="Left"
+            <!-- InfoFit holds the info block at its natural size, so font sizes are the same for every game and
+                 change only with the interface scale (Settings). Its limits are set in SizeTrailer(). -->
+            <Grid x:Name="InfoFit" HorizontalAlignment="Left"
                      VerticalAlignment="Bottom" Margin="56,0,0,36">
             <StackPanel x:Name="InfoPanel" HorizontalAlignment="Left">
                 <StackPanel.RenderTransform>
@@ -212,14 +211,13 @@
                      scaled to fit inside it, so every game's title occupies the same space and never
                      spills over. -->
                 <Grid x:Name="TitleBox" MaxWidth="440" MaxHeight="250" HorizontalAlignment="Left" Margin="0,0,0,18">
-                    <Viewbox Stretch="Uniform" StretchDirection="DownOnly"
-                             HorizontalAlignment="Left" VerticalAlignment="Bottom" MaxWidth="440" MaxHeight="250">
+                    <Grid HorizontalAlignment="Left" VerticalAlignment="Bottom" MaxWidth="440" MaxHeight="250">
                         <StackPanel>
                             <Image x:Name="Logo" HorizontalAlignment="Left" Stretch="Uniform"/>
                             <TextBlock x:Name="TitleText" FontSize="40" FontWeight="SemiBold" TextWrapping="Wrap" MaxWidth="380"
                                        FontFamily="Segoe UI Variable Display, Segoe UI" Foreground="{DynamicResource Fg}"/>
                         </StackPanel>
-                    </Viewbox>
+                    </Grid>
                 </Grid>
 
                 <!-- Extra HowLongToBeat details: play time, then two metadata columns, the description
@@ -333,7 +331,7 @@
                     </StackPanel>
                 </Button>
             </StackPanel>
-            </Viewbox>
+            </Grid>
 
             <!-- Status + controller hint -->
             <StackPanel x:Name="StatusPanel" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="56,24,0,0">
