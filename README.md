@@ -22,5 +22,3 @@ Dark, controller-friendly WPF game launcher with hero art, a corner trailer, and
 ![Main view](screenshots/main.png)
 ![Game details](screenshots/details.png)
 ![Trailer](screenshots/trailer.png)
-
-> Put your screenshots in `screenshots/` (PNG/JPG) with those names.
