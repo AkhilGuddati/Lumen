@@ -74,6 +74,10 @@ public partial class MainWindow : Window
         };
 
         SizeChanged += (_, _) => SizeTrailer();
+        // the real sizes only settle after layout (and change with the interface scale), so re-fit on those too
+        Page.SizeChanged += (_, _) => SizeTrailer();
+        HeroGrid.SizeChanged += (_, _) => SizeTrailer();
+        Shelf.SizeChanged += (_, _) => SizeTrailer();
         Activated += (_, _) => { if (paused) { paused = false; SetTargets(); } };   // resume the theme when you come back
 
         timer = new DispatcherTimer(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(30) };
@@ -374,6 +378,15 @@ public partial class MainWindow : Window
         TrailerBox.Width = w;
         TrailerBox.Height = h;
         TrailerBox.Clip = new RectangleGeometry(new Rect(0, 0, w, h), 12, 12);
+
+        // Nothing may overlap: the info block (left) is shrunk to fit beside the trailer (right), below the top
+        // buttons / status line and above the shelf. `pw` / `hh` are layout units, so this holds at any UI scale.
+        bool trailerOn = trailerShown && TrailerBox.Visibility == Visibility.Visible;
+        double right = trailerOn ? pw - 40 - w - 32 : pw - 24;       // right-hand limit of the info block
+        double hh = HeroGrid.ActualHeight > 0 ? HeroGrid.ActualHeight : heroH;
+        InfoFit.MaxWidth = Math.Max(200, right - 56);                 // 56 = its left margin
+        InfoFit.MaxHeight = Math.Max(90, hh - 36 - 84);               // 36 bottom margin, 84 = top buttons / status line
+        StatusPanel.MaxWidth = Math.Max(160, pw - 56 - 216);          // stays clear of the top-right buttons
     }
 
     // UI scale: the page lays out in a smaller coordinate space and the transform scales it back up
@@ -420,6 +433,7 @@ public partial class MainWindow : Window
             };
             TrailerBox.BeginAnimation(OpacityProperty, a);
         }
+        SizeTrailer();      // the info block makes room for the trailer, or takes the space back
     }
 
     void Clear()

@@ -199,7 +199,12 @@
             <Border x:Name="ScrimH" IsHitTestVisible="False"/>
             <Border x:Name="ScrimV" IsHitTestVisible="False"/>
 
-            <StackPanel x:Name="InfoPanel" VerticalAlignment="Bottom" HorizontalAlignment="Left" Margin="56,0,0,36">
+            <!-- InfoFit shrinks the whole info block to fit (it never overlaps): beside the trailer, under the top
+                 buttons / status line and above the shelf, at any window size or interface scale. Its limits are
+                 set in SizeTrailer(). -->
+            <Viewbox x:Name="InfoFit" Stretch="Uniform" StretchDirection="DownOnly" HorizontalAlignment="Left"
+                     VerticalAlignment="Bottom" Margin="56,0,0,36">
+            <StackPanel x:Name="InfoPanel" HorizontalAlignment="Left">
                 <StackPanel.RenderTransform>
                     <TranslateTransform x:Name="InfoTr"/>
                 </StackPanel.RenderTransform>
@@ -251,19 +256,19 @@
 
                     <StackPanel x:Name="MetaGenresRow" Grid.Row="1" Grid.Column="0" Margin="0,0,24,7">
                         <TextBlock Text="Genres" Style="{StaticResource StatL}"/>
-                        <TextBlock x:Name="MetaGenres" FontSize="13" TextWrapping="Wrap" Foreground="{DynamicResource Fg}"/>
+                        <TextBlock x:Name="MetaGenres" FontSize="13" MaxWidth="260" TextWrapping="Wrap" Foreground="{DynamicResource Fg}"/>
                     </StackPanel>
                     <StackPanel x:Name="MetaDevRow" Grid.Row="1" Grid.Column="1" Margin="0,0,0,7">
                         <TextBlock Text="Developer" Style="{StaticResource StatL}"/>
-                        <TextBlock x:Name="MetaDev" FontSize="13" TextWrapping="Wrap" Foreground="{DynamicResource Fg}"/>
+                        <TextBlock x:Name="MetaDev" FontSize="13" MaxWidth="260" TextWrapping="Wrap" Foreground="{DynamicResource Fg}"/>
                     </StackPanel>
                     <StackPanel x:Name="MetaPubRow" Grid.Row="2" Grid.Column="0" Margin="0,0,24,0">
                         <TextBlock Text="Publisher" Style="{StaticResource StatL}"/>
-                        <TextBlock x:Name="MetaPub" FontSize="13" TextWrapping="Wrap" Foreground="{DynamicResource Fg}"/>
+                        <TextBlock x:Name="MetaPub" FontSize="13" MaxWidth="260" TextWrapping="Wrap" Foreground="{DynamicResource Fg}"/>
                     </StackPanel>
                     <StackPanel x:Name="MetaReleaseRow" Grid.Row="2" Grid.Column="1">
                         <TextBlock Text="Release" Style="{StaticResource StatL}"/>
-                        <TextBlock x:Name="MetaRelease" FontSize="13" TextWrapping="Wrap" Foreground="{DynamicResource Fg}"/>
+                        <TextBlock x:Name="MetaRelease" FontSize="13" MaxWidth="260" TextWrapping="Wrap" Foreground="{DynamicResource Fg}"/>
                     </StackPanel>
 
                     <!-- description: its own last column, starting level with the play time. The box is a
@@ -328,11 +333,12 @@
                     </StackPanel>
                 </Button>
             </StackPanel>
+            </Viewbox>
 
             <!-- Status + controller hint -->
-            <StackPanel HorizontalAlignment="Left" VerticalAlignment="Top" Margin="56,24,0,0">
-                <TextBlock x:Name="Status" FontSize="13" Foreground="{DynamicResource FgDim}"/>
-                <TextBlock x:Name="PadHint" FontSize="13" Margin="0,4,0,0" Visibility="Collapsed"
+            <StackPanel x:Name="StatusPanel" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="56,24,0,0">
+                <TextBlock x:Name="Status" FontSize="13" TextWrapping="Wrap" Foreground="{DynamicResource FgDim}"/>
+                <TextBlock x:Name="PadHint" FontSize="13" TextWrapping="Wrap" Margin="0,4,0,0" Visibility="Collapsed"
                            Text="&#x25C0; &#x25B6; Browse    &#x25B2; &#x25BC; Description    START Play    A Play Trailer    Y Show Trailer    X Mute Trailer    B Back"
                            Foreground="{DynamicResource FgDim}"/>
             </StackPanel>
