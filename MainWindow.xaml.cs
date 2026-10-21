@@ -13,20 +13,20 @@ namespace Lumen;
 
 public partial class MainWindow : Window
 {
+    // ---------- state ----------
     readonly ObservableCollection<Game> games;
     readonly HashSet<string> busy = new();
-    readonly HashSet<string> hltbRetried = new();
     readonly HashSet<string> descRetried = new();
     readonly Dictionary<string, Process> running = new();   // game id -> process we started
-    readonly DispatcherTimer timer;
 
     Game? cur, musicFor;
     bool muted, musicPlaying, full, trailerPlaying, trailerShown, paused;
     double trailerTarget, musicTarget;
-    double? scrollTarget, descTarget;
-    ScrollViewer? sv;
+    double? shelfTarget, gridTarget, descTarget;            // scroll positions the frame loop glides towards
     string? trailerPath, heroShown;
-    int heroToken, trailerToken;
+    int heroToken, trailerToken, trailerLoadToken, infoToken;
+    bool infoFilled;                                        // the title/metadata block has content to fade out
+    TimeSpan lastFrame;
 
     // controller state
     ushort prevButtons;
@@ -34,76 +34,129 @@ public partial class MainWindow : Window
     DateTime nextRepeat, vNextRepeat;
     bool padConnected;
 
+    // ---------- motion vocabulary ----------
+    // One set of curves for the whole app, so every move has the same feel.
+    static T Frozen<T>(T f) where T : Freezable { f.Freeze(); return f; }
+    static readonly IEasingFunction EaseOut = Frozen(new CubicEase { EasingMode = EasingMode.EaseOut });
+    static readonly IEasingFunction EaseIn = Frozen(new CubicEase { EasingMode = EasingMode.EaseIn });
+    static readonly IEasingFunction EaseInOut = Frozen(new CubicEase { EasingMode = EasingMode.EaseInOut });
+    static readonly IEasingFunction Decel = Frozen(new QuinticEase { EasingMode = EasingMode.EaseOut });   // long, soft landing
+    static readonly IEasingFunction Settle = Frozen(new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = .25 });
+
+    // Animates one property. `from` null = carry on from wherever it is right now (so an interrupted
+    // move never jumps). `done` runs when it finishes (not when it is replaced by a newer animation).
+    static void Anim(IAnimatable target, DependencyProperty prop, double? from, double to, int ms,
+                     IEasingFunction ease, int delayMs = 0, Action? done = null)
+    {
+        var a = new DoubleAnimation(to, TimeSpan.FromMilliseconds(ms)) { EasingFunction = ease };
+        if (from is { } f) a.From = f;
+        if (delayMs > 0) a.BeginTime = TimeSpan.FromMilliseconds(delayMs);
+        if (done is not null) a.Completed += (_, _) => done();
+        target.BeginAnimation(prop, a);
+    }
+
+    // Drops any running animation and sets the value outright.
+    static void Snap(IAnimatable target, DependencyProperty prop, double value)
+    {
+        target.BeginAnimation(prop, null);
+        ((DependencyObject)target).SetValue(prop, value);
+    }
+
     public MainWindow()
     {
         InitializeComponent();
         Store.Load();
         games = Store.Games;
-        foreach (var g0 in games)   // retry missing trailers/music/art once per launch
+        foreach (var g in games)   // retry missing trailers/music/art once per launch
         {
-            if (g0.TrailerFile is null || !File.Exists(g0.TrailerFile)) { g0.TrailerFile = null; g0.TrailerTried = false; }
-            if (g0.MusicFile is null || !File.Exists(g0.MusicFile)) { g0.MusicFile = null; g0.MusicTried = false; }
-            else if (g0.MusicVer < 1) { Assets.DeleteMusic(g0); g0.MusicTried = false; }   // re-fetch old noisy DASH m4a
+            if (g.TrailerFile is null || !File.Exists(g.TrailerFile)) { g.TrailerFile = null; g.TrailerTried = false; }
+            if (g.MusicFile is null || !File.Exists(g.MusicFile)) { g.MusicFile = null; g.MusicTried = false; }
+            else if (g.MusicVer < 1) { Assets.DeleteMusic(g); g.MusicTried = false; }   // re-fetch old noisy DASH m4a
             // same for the cover/banner/logo: if a cached image vanished, fetch it again
-            if (g0.Grid is not null && !File.Exists(g0.Grid)) { g0.Grid = null; g0.Fetched = false; }
-            if (g0.Hero is not null && !File.Exists(g0.Hero)) { g0.Hero = null; g0.Fetched = false; }
-            if (g0.Logo is not null && !File.Exists(g0.Logo)) { g0.Logo = null; g0.Fetched = false; }
+            if (g.Grid is not null && !File.Exists(g.Grid)) { g.Grid = null; g.Fetched = false; }
+            if (g.Hero is not null && !File.Exists(g.Hero)) { g.Hero = null; g.Fetched = false; }
+            if (g.Logo is not null && !File.Exists(g.Logo)) { g.Logo = null; g.Fetched = false; }
         }
         SortFavs();
         List.ItemsSource = games;
+        NavList.ItemsSource = games;   // the all-games pane shows the same library as a grid
+
+        // A cover finished decoding in the background: repaint the game that owns it, so its tile
+        // (shelf or grid) swaps from empty to art without any decode ever touching the UI thread.
+        Art.Decoded += path => Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        {
+            foreach (var g in games) if (g.Grid == path) g.Refresh();   // Background: never ahead of animation frames
+        }));
 
         bool adopted = false;
-        foreach (var g1 in games) adopted |= Assets.Adopt(g1);   // media/art files -> "<game title>…"
+        foreach (var g in games) adopted |= Assets.Adopt(g);   // media/art files -> "<game title>…"
         if (adopted) Store.Save();
-        Assets.Purge(games);                                     // drop media/art files no game claims any more
+        Assets.Purge(games);                                   // drop media/art files no game claims any more
 
-        if (Store.Settings.UiScale <= 0) Store.Settings.UiScale = 1.0;
         ApplyScale();
         ApplyTheme();
         SourceInitialized += (_, _) => Win.Mica(this, !Win.Light());
-        SystemEvents.UserPreferenceChanged += (_, _) => Dispatcher.Invoke(() =>
-        {
-            ApplyTheme();
-            Win.Mica(this, !Win.Light());
-        });
+        SystemEvents.UserPreferenceChanged += OnPrefsChanged;
 
         PreviewKeyDown += (_, e) =>
         {
             if (e.Key == Key.F11) { ToggleFull(); e.Handled = true; }
+            else if (e.Key == Key.G) { ToggleNav(); e.Handled = true; }   // same grid as SELECT on the pad
+            else if (e.Key == Key.Escape && navOpen) { CloseNav(false); e.Handled = true; }
             else if (e.Key == Key.Escape && full) { ToggleFull(); e.Handled = true; }
         };
 
+        // The real sizes only settle after layout (and change with the interface scale), so re-fit on all of these.
         SizeChanged += (_, _) => SizeTrailer();
         InfoPanel.SizeChanged += (_, _) => SizeTrailer();
-        // the real sizes only settle after layout (and change with the interface scale), so re-fit on those too
+        TopBar.SizeChanged += (_, _) => SizeTrailer();
         Page.SizeChanged += (_, _) => SizeTrailer();
         HeroGrid.SizeChanged += (_, _) => SizeTrailer();
         Shelf.SizeChanged += (_, _) => SizeTrailer();
         Activated += (_, _) => { if (paused) { paused = false; SetTargets(); } };   // resume the theme when you come back
 
-        timer = new DispatcherTimer(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(30) };
-        timer.Tick += Tick;
-        timer.Start();
+        // One per-frame loop for everything that glides (scrolling, volume, controller): it runs in step
+        // with the display instead of a fixed 30 ms timer, and all speeds are time-based.
+        CompositionTarget.Rendering += OnFrame;
+        Closed += (_, _) =>
+        {
+            CompositionTarget.Rendering -= OnFrame;
+            SystemEvents.UserPreferenceChanged -= OnPrefsChanged;
+            Store.SaveNow();
+        };
 
         Loaded += (_, _) =>
         {
             if (!full) ToggleFull();      // start in fullscreen (Esc / F11 to leave)
             SizeTrailer();
-            Page.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(700))
-            { EasingFunction = new QuadraticEase() });
+            Anim(Page, OpacityProperty, 0, 1, 800, EaseOut);
             if (games.Count > 0) List.SelectedIndex = 0;
             else Hint.Visibility = Visibility.Visible;
         };
+    }
+
+    void OnPrefsChanged(object? s, UserPreferenceChangedEventArgs e)
+    {
+        if (e.Category is not (UserPreferenceCategory.General or UserPreferenceCategory.Color or UserPreferenceCategory.VisualStyle)) return;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            ApplyTheme();
+            Win.Mica(this, !Win.Light());
+        }));
     }
 
     // ---------- Windows theme ----------
     static Color Blend(Color a, Color b, double t) => Color.FromRgb(
         (byte)(a.R + (b.R - a.R) * t), (byte)(a.G + (b.G - a.G) * t), (byte)(a.B + (b.B - a.B) * t));
 
+    static Color WithAlpha(byte a, Color c) => Color.FromArgb(a, c.R, c.G, c.B);
+    static Color ThemeBg(bool light) => light ? Color.FromRgb(0xF3, 0xF3, 0xF3) : Color.FromRgb(0x1C, 0x1C, 0x1C);
+
     void ApplyTheme()
     {
         bool light = Win.Light();
-        var bg = light ? Color.FromRgb(0xF3, 0xF3, 0xF3) : Color.FromRgb(0x1C, 0x1C, 0x1C);
+        var bg = ThemeBg(light);
+        var card = light ? Colors.White : Color.FromRgb(0x2B, 0x2B, 0x2B);
         var accent = SystemParameters.WindowGlassColor;
         if (!light) accent = Blend(accent, Colors.White, .25);
 
@@ -111,101 +164,67 @@ public partial class MainWindow : Window
         r["Bg"] = new SolidColorBrush(bg);
         r["Fg"] = new SolidColorBrush(light ? Color.FromRgb(0x1A, 0x1A, 0x1A) : Colors.White);
         r["FgDim"] = new SolidColorBrush(light ? Color.FromRgb(0x5F, 0x5F, 0x5F) : Color.FromRgb(0xB0, 0xB0, 0xB0));
-        r["Card"] = new SolidColorBrush(light ? Colors.White : Color.FromRgb(0x2B, 0x2B, 0x2B));
+        r["Card"] = new SolidColorBrush(card);
         r["Accent"] = new SolidColorBrush(Color.FromRgb(accent.R, accent.G, accent.B));
-        // The play button keeps the theme accent it always had, just see-through;
-        // it gains solidity (rather than losing it) the more active it becomes.
-        r["PlayAccent"]     = new SolidColorBrush(Color.FromArgb(0x66, accent.R, accent.G, accent.B));
+        // The play button keeps the theme accent, just see-through; it gains solidity the more active it becomes.
+        r["PlayAccent"] = new SolidColorBrush(Color.FromArgb(0x66, accent.R, accent.G, accent.B));
         r["PlayAccentHover"] = new SolidColorBrush(Color.FromArgb(0xCC, accent.R, accent.G, accent.B));
         r["PlayAccentDown"] = new SolidColorBrush(Color.FromArgb(0xFF, accent.R, accent.G, accent.B));
-
-        var card = light ? Colors.White : Color.FromRgb(0x2B, 0x2B, 0x2B);
         r["Glass"] = new SolidColorBrush(Color.FromArgb(light ? (byte)0xB8 : (byte)0x99, card.R, card.G, card.B));
         r["GlassLine"] = new SolidColorBrush(light ? Color.FromArgb(0x28, 0, 0, 0) : Color.FromArgb(0x30, 255, 255, 255));
 
-        Color A(byte a) => Color.FromArgb(a, bg.R, bg.G, bg.B);
         ScrimH.Background = new LinearGradientBrush(
-            new GradientStopCollection { new(A(0xF0), 0), new(A(0xA0), .45), new(A(0), 1) },
+            new GradientStopCollection { new(WithAlpha(0xF0, bg), 0), new(WithAlpha(0xA0, bg), .45), new(WithAlpha(0, bg), 1) },
             new Point(0, .5), new Point(1, .5));
         ScrimV.Background = new LinearGradientBrush(
-            new GradientStopCollection { new(A(0), .55), new(A(0xC0), 1) },
+            new GradientStopCollection { new(WithAlpha(0, bg), .55), new(WithAlpha(0xC0, bg), 1) },
             new Point(.5, 0), new Point(.5, 1));
         ApplyShelf();
     }
 
-    // The sheet the covers sit on: translucent, and tinted with the banner's colours so the
-    // artwork above bleeds into it instead of ending in a flat grey band.
+    // The sheet the covers sit on: translucent, and tinted with the banner's colours so the artwork
+    // above bleeds into it instead of ending in a flat grey band. The brushes are created once and
+    // their stops animated, so the tint drifts to the new game's colour instead of snapping.
     Color? bannerTint;
+    LinearGradientBrush? shelfBrush, glowBrush;
+
+    static LinearGradientBrush Vertical(Color[] colors, double[] offsets) => new(
+        new GradientStopCollection(colors.Select((c, i) => new GradientStop(c, offsets[i]))),
+        new Point(.5, 0), new Point(.5, 1));
+
     void ApplyShelf()
     {
         bool light = Win.Light();
-        var bg = light ? Color.FromRgb(0xF3, 0xF3, 0xF3) : Color.FromRgb(0x1C, 0x1C, 0x1C);
-        byte baseA = light ? (byte)0x84 : (byte)0x7C;     // a little more transparent than before
+        var bg = ThemeBg(light);
         var tint = bannerTint ?? bg;
-        // The pane: a wash of the banner's colour at the top settling into the theme's background.
-        Shelf.Background = new LinearGradientBrush(
-            new GradientStopCollection
-            {
-                new(Color.FromArgb(0x33, tint.R, tint.G, tint.B), 0),
-                new(Color.FromArgb(0x20, tint.R, tint.G, tint.B), .45),
-                new(Color.FromArgb(baseA, bg.R, bg.G, bg.B), 1),
-            },
-            new Point(.5, 0), new Point(.5, 1));
-
-        // A faint glow of the artwork's own colour along the top edge of the pane.
+        byte baseA = light ? (byte)0x84 : (byte)0x7C;
         byte glowA = light ? (byte)0x20 : (byte)0x33;
-        Glow.Fill = new LinearGradientBrush(
-            new GradientStopCollection
-            {
-                new(Color.FromArgb(glowA, tint.R, tint.G, tint.B), 0),
-                new(Color.FromArgb((byte)(glowA / 3), tint.R, tint.G, tint.B), .35),
-                new(Color.FromArgb(0, tint.R, tint.G, tint.B), 1),
-            },
-            new Point(.5, 0), new Point(.5, 1));
-    }
 
-    // Average colour of the banner (sampled from a thumbnail), pushed towards a mid tone so the
-    // hue is actually visible on the dark pane.
-    static Color? BannerTint(BitmapSource b)
-    {
-        if (b.PixelWidth <= 0 || b.PixelHeight <= 0) return null;
-        var small = new TransformedBitmap(b, new ScaleTransform(48.0 / b.PixelWidth, 48.0 / b.PixelWidth));
-        var conv = new FormatConvertedBitmap(small, PixelFormats.Bgra32, null, 0);
-        int w = conv.PixelWidth, h = conv.PixelHeight, stride = w * 4;
-        if (w <= 0 || h <= 0) return null;
-        var px = new byte[stride * h];
-        conv.CopyPixels(px, stride, 0);
-        long sr = 0, sg = 0, sb = 0;
-        int n = w * h;
-        for (int i = 0; i < px.Length; i += 4) { sr += px[i + 2]; sg += px[i + 1]; sb += px[i]; }
-        if (n <= 0) return null;
-        var avg = Color.FromRgb((byte)(sr / n), (byte)(sg / n), (byte)(sb / n));
+        // The pane: a wash of the banner's colour at the top settling into the theme's background.
+        Color[] pane = { WithAlpha(0x33, tint), WithAlpha(0x20, tint), WithAlpha(baseA, bg) };
+        // A faint glow of the artwork's own colour along the top edge (shelf, and the all-games pane).
+        Color[] glow = { WithAlpha(glowA, tint), WithAlpha((byte)(glowA / 3), tint), WithAlpha(0, tint) };
 
-        // HSV: keep the hue, raise the saturation, park the brightness at the theme's tone.
-        double r = avg.R / 255.0, g = avg.G / 255.0, bl = avg.B / 255.0;
-        double mx = Math.Max(r, Math.Max(g, bl)), mn = Math.Min(r, Math.Min(g, bl)), d = mx - mn;
-        double hue = 0;
-        if (d > 0)
+        if (shelfBrush is null || glowBrush is null)
         {
-            if (mx == r) hue = 60 * (((g - bl) / d) % 6);
-            else if (mx == g) hue = 60 * (((bl - r) / d) + 2);
-            else hue = 60 * (((r - g) / d) + 4);
-            if (hue < 0) hue += 360;
+            shelfBrush = Vertical(pane, new[] { 0, .45, 1 });
+            glowBrush = Vertical(glow, new[] { 0, .35, 1 });
+            Shelf.Background = shelfBrush;
+            Glow.Fill = glowBrush;
+            PaneGlow.Fill = glowBrush;
+            return;
         }
-        double sat = mx <= 0 ? 0 : d / mx;
-        sat = Math.Min(1, sat * 1.6 + 0.18);
-        double val = Win.Light() ? 0.82 : 0.34;
 
-        double c2 = val * sat, x2 = c2 * (1 - Math.Abs((hue / 60) % 2 - 1)), m2 = val - c2;
-        double rr, gg, bb2;
-        if (hue < 60) { rr = c2; gg = x2; bb2 = 0; }
-        else if (hue < 120) { rr = x2; gg = c2; bb2 = 0; }
-        else if (hue < 180) { rr = 0; gg = c2; bb2 = x2; }
-        else if (hue < 240) { rr = 0; gg = x2; bb2 = c2; }
-        else if (hue < 300) { rr = x2; gg = 0; bb2 = c2; }
-        else { rr = c2; gg = 0; bb2 = x2; }
-        return Color.FromRgb((byte)((rr + m2) * 255), (byte)((gg + m2) * 255), (byte)((bb2 + m2) * 255));
+        var dur = TimeSpan.FromMilliseconds(500);
+        for (int i = 0; i < 3; i++)
+        {
+            TintStop(shelfBrush, i, pane[i], dur);
+            TintStop(glowBrush, i, glow[i], dur);
+        }
     }
+
+    static void TintStop(LinearGradientBrush b, int i, Color c, TimeSpan dur) =>
+        b.GradientStops[i].BeginAnimation(GradientStop.ColorProperty, new ColorAnimation(c, dur) { EasingFunction = EaseInOut });
 
     // ---------- Fullscreen ----------
     void Full_Click(object s, RoutedEventArgs e) => ToggleFull();
@@ -231,249 +250,210 @@ public partial class MainWindow : Window
         Dispatcher.BeginInvoke(new Action(() => Win.Mica(this, !Win.Light())));
     }
 
-    // ---------- Display + transitions ----------
-    static readonly Dictionary<string, BitmapImage> artCache = new();
-    static BitmapImage? Img(string? p)
+    // UI scale: the page lays out in a smaller coordinate space and the transform scales it back up
+    // to fill the window, so everything (fonts, covers, spacing) grows together.
+    void ApplyScale() => PreviewScale(Store.Settings.UiScale, Store.Settings.TextScale);
+
+    // Live preview while a scale slider moves (not persisted until Save). `t` scales the info text only.
+    void PreviewScale(double s, double t)
     {
-        if (p is null || !File.Exists(p)) return null;
-        try
-        {
-            var key = p! + "|" + File.GetLastWriteTimeUtc(p!).Ticks;
-            if (artCache.TryGetValue(key, out var hit)) return hit;
-            var b = new BitmapImage();
-            b.BeginInit();
-            b.CacheOption = BitmapCacheOption.OnLoad;
-            b.UriSource = new Uri(p);
-            b.EndInit();
-            b.Freeze();
-            artCache[key] = b;
-            return b;
-        }
-        catch { return null; }
+        if (s <= 0) s = 1.0;
+        if (t <= 0) t = 1.0;
+        Page.LayoutTransform = new ScaleTransform(s, s);
+        MetaCard.LayoutTransform = new ScaleTransform(t, t);
+        SizeTrailer();
     }
 
-    // Game logos usually come as PNGs with generous transparent padding *and* a wide, faint
-    // dark halo baked into the alpha (a soft shadow). Left alone, the padding makes the title
-    // look detached and the halo shows up as a grey box behind it, so crop to the artwork and
-    // rescale the alpha so the halo fades to fully transparent instead of ending in a hard edge.
-    const byte LogoHaze = 64;
-    static readonly Dictionary<string, ImageSource> logoCache = new();
-    static ImageSource? LogoImg(string? p)
-    {
-        var src = Img(p);
-        if (src is not BitmapImage b) return src;
-        // Keyed on the file's timestamp too: replacing the logo link re-downloads to the same file
-        // name, and a path-only key would keep showing the old image.
-        var key = p! + "|" + File.GetLastWriteTimeUtc(p!).Ticks;
-        if (logoCache.TryGetValue(key, out var hit)) return hit;
-        ImageSource result = b;
-        try { result = TrimLogo(b) ?? b; } catch { }
-        logoCache[key] = result;
-        return result;
-    }
+    // ---------- Banner ----------
+    // Images are decoded off the UI thread (see Art); on the UI thread we only ever read the cache,
+    // and a miss fills itself in the background and repaints when it is ready.
 
-    static ImageSource? TrimLogo(BitmapSource src)
-    {
-        BitmapSource full = src.Format == PixelFormats.Bgra32
-            ? src
-            : new FormatConvertedBitmap(src, PixelFormats.Bgra32, null, 0);
-        int w = full.PixelWidth, h = full.PixelHeight;
-        if (w <= 0 || h <= 0) return null;
-        int stride = w * 4;
-        var px = new byte[stride * h];
-        full.CopyPixels(px, stride, 0);
-
-        // Try to ignore the halo; fall back to a gentler threshold for faint logos.
-        foreach (byte t in new byte[] { LogoHaze, 16, 8, 4 })
-        {
-            int minX = w, minY = h, maxX = -1, maxY = -1;
-            for (int y = 0; y < h; y++)
-            {
-                int row = y * stride;
-                for (int x = 0; x < w; x++)
-                {
-                    if (px[row + x * 4 + 3] > t)
-                    {
-                        if (x < minX) minX = x;
-                        if (x > maxX) maxX = x;
-                        if (y < minY) minY = y;
-                        if (y > maxY) maxY = y;
-                    }
-                }
-            }
-            if (maxX <= minX || maxY <= minY) continue;
-            int cw = maxX - minX + 1, ch = maxY - minY + 1;
-            var outPx = new byte[cw * ch * 4];
-            for (int y = 0; y < ch; y++)
-            {
-                int srow = (minY + y) * stride + minX * 4, drow = y * cw * 4;
-                for (int x = 0; x < cw; x++)
-                {
-                    int s = srow + x * 4, d = drow + x * 4;
-                    byte a = px[s + 3];
-                    if (a <= t) a = 0;
-                    else a = (byte)((a - t) * 255 / (255 - t));
-                    outPx[d] = px[s];
-                    outPx[d + 1] = px[s + 1];
-                    outPx[d + 2] = px[s + 2];
-                    outPx[d + 3] = a;
-                }
-            }
-            var bmp = BitmapSource.Create(cw, ch, 96, 96, PixelFormats.Bgra32, null, outPx, cw * 4);
-            bmp.Freeze();
-            return bmp;
-        }
-        return null;
-    }
-
-    // Same format as the "additional content" rows beside it, so the numbers line up.
-    static string Hrs(double h) => Fmt.Hours(h);
-
-    // Crossfade the banner: new image fades in on top, then becomes the base layer.
+    // Crossfade the banner: the new image fades in on top, then becomes the base layer.
     void SetHero(string? p)
     {
-        var img = Img(p);
         int tok = ++heroToken;
+        var img = Art.Cached(p);
+        if (img is not null) { ApplyHero(img, tok); return; }
+        if (p is null || !File.Exists(p)) { ApplyHero(null, tok); return; }
+        // Decode AND work out the tint here, off the UI thread: Art.Tint caches its result on the bitmap,
+        // so ApplyHero's call is then free (otherwise the pixel readback happens mid-transition).
+        // The short delay lets a fast flick through the shelf drop banners it has already passed
+        // (a stale token means nobody wants this one) instead of decoding every one of them.
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(90);
+            if (tok != heroToken) return null;
+            var b = Art.Img(p);
+            if (b is not null) Art.Tint(b);
+            return b;
+        }).ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (tok == heroToken) ApplyHero(t.Result, tok);
+        })), TaskScheduler.Default);
+    }
 
-        // Let the banner's colours bleed into the shelf.
-        var tint = img is null ? null : BannerTint(img);
+    void ApplyHero(BitmapImage? img, int tok)
+    {
+        // Let the banner's colours bleed into the shelf (faded, not snapped).
+        var tint = img is null ? null : Art.Tint(img);
         if (tint != bannerTint) { bannerTint = tint; ApplyShelf(); }
 
         if (img is null)
         {
-            var o = new DoubleAnimation(0, TimeSpan.FromMilliseconds(300));
-            o.Completed += (_, _) => { if (tok == heroToken) Hero.Source = null; };
-            Hero.BeginAnimation(OpacityProperty, o);
+            Anim(Hero2, OpacityProperty, null, 0, 300, EaseOut);
+            Anim(Hero, OpacityProperty, null, 0, 300, EaseOut, 0, () => { if (tok == heroToken) Hero.Source = null; });
             return;
         }
+
+        // The incoming banner drifts in from a hair larger while it fades up, so the swap reads as one
+        // continuous move instead of two layers blinking at each other. If a previous swap is still
+        // running, this one carries on from where it is rather than restarting from nothing.
+        bool idle = Hero2.Opacity < .02;
         Hero2.Source = img;
-        var f = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(450)) { EasingFunction = new QuadraticEase() };
-        f.Completed += (_, _) =>
+        Anim(HeroZoom, ScaleTransform.ScaleXProperty, idle ? 1.04 : null, 1, 800, EaseOut);
+        Anim(HeroZoom, ScaleTransform.ScaleYProperty, idle ? 1.04 : null, 1, 800, EaseOut);
+        Anim(Hero2, OpacityProperty, idle ? 0 : null, 1, 650, EaseInOut, 0, () =>
         {
             if (tok != heroToken) return;
-            Hero.BeginAnimation(OpacityProperty, null);
-            Hero.Opacity = 1;
+            Snap(Hero, OpacityProperty, 1);
             Hero.Source = img;
-            Hero2.BeginAnimation(OpacityProperty, null);
-            Hero2.Opacity = 0;
-        };
-        Hero2.BeginAnimation(OpacityProperty, f);
+            Snap(Hero2, OpacityProperty, 0);
+        });
     }
 
-    void AnimateInfo()
+    // ---------- Title + metadata ----------
+    // The old title/metadata fade out quickly, the new content is swapped in while nothing is visible,
+    // then it rises in: title first, the metadata a beat later. The play button lives outside this block,
+    // so it never blinks along with the switch.
+    void Render(Game g, bool swap)
     {
-        var e = new CubicEase { EasingMode = EasingMode.EaseOut };
-        InfoPanel.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(380)) { EasingFunction = e });
-        InfoTr.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(18, 0, TimeSpan.FromMilliseconds(420)) { EasingFunction = e });
-    }
+        Hint.Visibility = Visibility.Collapsed;
+        PlayBtn.Visibility = Visibility.Visible;
+        if (swap || heroShown != g.Hero) { heroShown = g.Hero; SetHero(g.Hero); }
 
-    // Keeps the trailer window proportional to the app window (16:9, bottom-right).
-    void SizeTrailer()
-    {
-        double pw = Page.ActualWidth > 0 ? Page.ActualWidth : ActualWidth;
-        double ph = Page.ActualHeight > 0 ? Page.ActualHeight : ActualHeight;
-        double heroH = Math.Max(200, ph - Shelf.ActualHeight - 60);
-        double w = Math.Clamp(pw * .26, 260, 640);
-        w = Math.Max(220, Math.Min(w, heroH * .55 * 16 / 9));
-        double h = w * 9 / 16;
-        TrailerBox.Width = w;
-        TrailerBox.Height = h;
-        TrailerSlot.Width = w;
-        TrailerSlot.Height = h;
-        TrailerBox.Clip = new RectangleGeometry(new Rect(0, 0, w, h), 12, 12);
-
-        // Nothing may overlap: the info block (left) is shrunk to fit beside the trailer (right), below the top
-        // buttons / status line and above the shelf. `pw` / `hh` are layout units, so this holds at any UI scale.
-        double right = pw - 40 - w - 32;                              // right-hand limit: the trailer's slot is always reserved
-        double hh = HeroGrid.ActualHeight > 0 ? HeroGrid.ActualHeight : heroH;
-        InfoFit.MaxWidth = Math.Max(200, right - 56);                 // 56 = its left margin
-        InfoFit.MaxHeight = Math.Max(90, hh - 36 - 84);               // 36 bottom margin, 84 = top buttons / status line
-        StatusPanel.MaxWidth = Math.Max(160, pw - 56 - 216);          // stays clear of the top-right buttons
-
-        // The "additional content" list takes whatever height the rest of the block leaves, and scrolls beyond
-        // that, so the block can never grow past the shelf. Sizes are in layout units (text scale `t` included).
-        double t = Store.Settings.TextScale <= 0 ? 1.0 : Store.Settings.TextScale;
-        double title = TitleBox.ActualHeight;
-        double others = InfoPanel.ActualHeight - DlcScroll.ActualHeight * t - title;   // everything except title and DLC list
-        // keep room for a readable logo (110 + its 18 gap); the list scrolls inside what is left
-        DlcScroll.MaxHeight = Math.Max(40, (InfoFit.MaxHeight - others - 128) / t);
-
-        // The logo gets whatever height the rest of the block leaves, so it scales down instead of being cut off.
-        double rest = InfoPanel.ActualHeight - title;                                 // includes the title's 18 gap
-        logoMaxH = Math.Max(60, InfoFit.MaxHeight - rest);
-        FitLogo();
-
-        // The description column takes the width left beside the metadata (up to 340), so its text is never
-        // cut off at the right edge; the text just wraps onto more lines inside its fixed-height box.
-        double colsW = MetaCard.ColumnDefinitions[0].ActualWidth + MetaCard.ColumnDefinitions[1].ActualWidth;
-        double availW = (InfoFit.MaxWidth - MetaCard.Margin.Left) / t - colsW - DescCard.Margin.Left;
-        double dw = Math.Clamp(availW, 160, 340);
-        if (Math.Abs(DescCard.Width - dw) > .5) DescCard.Width = dw;
-    }
-
-    // UI scale: the page lays out in a smaller coordinate space and the transform scales it back up
-    // to fill the window, so everything (fonts, covers, spacing) grows together.
-    void ApplyScale()
-    {
-        double s = Store.Settings.UiScale <= 0 ? 1.0 : Store.Settings.UiScale;
-        double t = Store.Settings.TextScale <= 0 ? 1.0 : Store.Settings.TextScale;
-        PreviewScale(s, t);
-    }
-
-    void ReleaseMedia()
-    {
-        Trailer.Stop(); Trailer.Close();
-        Music.Stop(); Music.Close();
-        trailerPath = null; trailerPlaying = false; musicPlaying = false;
-        musicFor = null;
-        ShowTrailer(false);
-    }
-
-    // The corner window is hidden by default: Y (or the film button) shows and hides it. A token
-    // makes sure a fade-out that is still running never collapses a window shown again meanwhile.
-    void ShowTrailer(bool on)
-    {
-        int tok = ++trailerToken;
-        if (on)
+        int tok = ++infoToken;
+        if (swap && infoFilled && InfoBody.Opacity > .05)
         {
-            if (trailerPath is null) return;   // nothing to reveal yet
-            var e = new CubicEase { EasingMode = EasingMode.EaseOut };
-            TrailerBox.Visibility = Visibility.Visible;
-            TrailerBox.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(350)));
-            var sc = new DoubleAnimation(.88, 1, TimeSpan.FromMilliseconds(420)) { EasingFunction = e };
-            TrailerScale.BeginAnimation(ScaleTransform.ScaleXProperty, sc);
-            TrailerScale.BeginAnimation(ScaleTransform.ScaleYProperty, sc);
-        }
-        else if (TrailerBox.Visibility == Visibility.Visible)
-        {
-            var a = new DoubleAnimation(0, TimeSpan.FromMilliseconds(220));
-            a.Completed += (_, _) =>
+            Anim(InfoBody, OpacityProperty, null, 0, 110, EaseIn, 0, () =>
             {
-                if (tok != trailerToken) return;
-                TrailerBox.BeginAnimation(OpacityProperty, null);
-                TrailerBox.Visibility = Visibility.Collapsed;
-            };
-            TrailerBox.BeginAnimation(OpacityProperty, a);
+                if (tok != infoToken) return;   // another game was selected meanwhile
+                FillInfo(g);
+                RevealInfo(true);
+            });
+            return;
         }
-        SizeTrailer();      // the info block makes room for the trailer, or takes the space back
+        FillInfo(g);
+        if (swap || InfoBody.Opacity < .99) RevealInfo(swap);   // a silent re-render just shows everything
     }
 
-    void Clear()
+    void RevealInfo(bool fresh)
     {
-        heroShown = null; SetHero(null);
-        Logo.Source = null; Logo.Visibility = Visibility.Collapsed;
-        TitleText.Text = ""; StatMain.Text = StatExtra.Text = StatFull.Text = ""; DescText.Text = ""; DescCard.Visibility = Visibility.Collapsed;
-        MetaCard.Visibility = Visibility.Collapsed;
-        PlayBtn.Visibility = Visibility.Collapsed;
-        trailerPath = null; trailerShown = false; Trailer.Stop(); ShowTrailer(false);
-        musicFor = null; musicPlaying = false; Music.Stop();
-        Hint.Visibility = games.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        if (fresh)
+        {
+            // Base values first: the delayed metadata animation would otherwise leave it at its last value.
+            Snap(InfoBody, OpacityProperty, 0);
+            Snap(MetaCard, OpacityProperty, 0);
+            Snap(InfoShift, TranslateTransform.YProperty, 14);
+            Snap(MetaShift, TranslateTransform.YProperty, 18);
+        }
+        double? o = fresh ? 0 : null;
+        Anim(InfoBody, OpacityProperty, o, 1, 360, EaseOut);
+        Anim(InfoShift, TranslateTransform.YProperty, fresh ? 14 : null, 0, 480, EaseOut);
+        Anim(MetaCard, OpacityProperty, o, 1, 360, EaseOut, fresh ? 80 : 0);
+        Anim(MetaShift, TranslateTransform.YProperty, fresh ? 18 : null, 0, 520, EaseOut, fresh ? 80 : 0);
+    }
+
+    void FillInfo(Game g)
+    {
+        infoFilled = true;
+
+        // The trimmed logo is shown from the cache; a first-time decode (logo scan included) happens
+        // in the background and repaints the title area when it is ready, so it never blocks the switch.
+        var logoImg = Art.LogoCached(g.Logo);
+        if (logoImg is not null) ApplyLogo(g, logoImg);
+        else if (g.Logo is not null && File.Exists(g.Logo))
+            // Short grace period first: if the selection has already moved on (fast navigation) the
+            // expensive decode + trim is skipped altogether instead of running for nothing.
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(90);
+                return cur == g ? Art.Logo(g.Logo) : null;
+            }).ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (cur == g && t.Result is not null) ApplyLogo(g, t.Result);
+            })), TaskScheduler.Default);
+        else ApplyLogo(g, null);
+
+        TitleText.Text = g.Name;
+        bool wait = busy.Contains(g.Id) && g.Main <= 0;
+        StatMain.Text = wait ? "…" : Fmt.Hours(g.Main);
+        StatExtra.Text = wait ? "…" : Fmt.Hours(g.Extra);
+        StatFull.Text = wait ? "…" : Fmt.Hours(g.Full);
+
+        string desc = g.Description ?? "";
+        bool descChanged = DescText.Text != desc;
+        DescText.Text = desc;
+        RenderMeta(g, desc);
+        // New text in the fixed-size box: start reading it from the top.
+        if (descChanged) { descTarget = null; DescCard.ScrollToVerticalOffset(0); }
+
+        PlayLabel.Text = IsRunning(g) ? "Running" : "Play";
+        if (!busy.Contains(g.Id))
+        {
+            var notes = new List<string>();
+            if (g.HltbTried && !g.ManualHours && g.Main <= 0 && g.Extra <= 0 && g.Full <= 0)
+                notes.Add("Play time not found — enter it manually in Edit…");
+            if (g.TrailerTried && g.TrailerFile is null)
+                notes.Add("No trailer found — set a link in Edit… (details: %AppData%\\Lumen\\log.txt)");
+            // A logo link that didn't download is what leaves the title as plain text.
+            if (!string.IsNullOrWhiteSpace(g.LogoUrl) && g.Logo is null)
+                notes.Add("Logo link couldn't be loaded — check it in Edit… (details: %AppData%\\Lumen\\log.txt)");
+            Status.Text = string.Join("    ", notes);
+        }
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(SizeTrailer));   // content changed: re-fit
+    }
+
+    // Genres / developer / publisher / release date in two columns; "additional content" (DLC) spans both below.
+    void RenderMeta(Game g, string desc)
+    {
+        static Visibility Vis(bool on) => on ? Visibility.Visible : Visibility.Collapsed;
+
+        string dev = (g.Developer ?? "").Trim();
+        if (dev.Length > 80) dev = dev[..77] + "...";
+
+        MetaGenres.Text = g.Genres ?? "";
+        MetaDev.Text = dev;
+        MetaPub.Text = g.Publisher ?? "";
+        MetaRelease.Text = g.ReleaseText;
+        MetaGenresRow.Visibility = Vis(!string.IsNullOrWhiteSpace(g.Genres));
+        MetaDevRow.Visibility = Vis(dev.Length > 0);
+        MetaPubRow.Visibility = Vis(!string.IsNullOrWhiteSpace(g.Publisher));
+        MetaReleaseRow.Visibility = Vis(g.ReleaseText.Length > 0);
+
+        DlcBlock.Visibility = Vis(g.Dlc.Count > 0);
+        DlcList.ItemsSource = g.Dlc.Count > 0 ? g.Dlc : null;
+
+        DescCard.Visibility = Vis(!string.IsNullOrWhiteSpace(desc));
+        // The description and the play time both live in this grid, so it stays visible
+        // even when there is no other metadata.
+        MetaCard.Visibility = Visibility.Visible;
     }
 
     // Sizes the logo to fill the title area (up to 420 x 240) while keeping its aspect ratio. It scales
     // down further when the rest of the info block leaves less height (logoMaxH, set in SizeTrailer), so it
     // is never cut off. Without an explicit size the image would stay at its natural pixel size.
     double logoMaxH = 240;
+
+    // Shows (or hides) the game's logo over the banner; the plain title takes over when there is none.
+    void ApplyLogo(Game g, ImageSource? src)
+    {
+        Logo.Source = src;
+        Logo.Visibility = src is null ? Visibility.Collapsed : Visibility.Visible;
+        FitLogo();
+        TitleText.Visibility = src is null ? Visibility.Visible : Visibility.Collapsed;
+        if (cur == g) Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(SizeTrailer));
+    }
+
     void FitLogo()
     {
         const double maxW = 420;
@@ -489,83 +469,74 @@ public partial class MainWindow : Window
         }
     }
 
-    void Render(Game g, bool animate)
+    void Clear()
     {
-        Hint.Visibility = Visibility.Collapsed;
-        PlayBtn.Visibility = Visibility.Visible;
-        if (heroShown != g.Hero || animate) { heroShown = g.Hero; SetHero(g.Hero); }
-        var logoImg = LogoImg(g.Logo);
-        Logo.Source = logoImg;
-        Logo.Visibility = logoImg is null ? Visibility.Collapsed : Visibility.Visible;
-        FitLogo();
-        TitleText.Text = g.Name;
-        TitleText.Visibility = Logo.Source is null ? Visibility.Visible : Visibility.Collapsed;
-        bool wait = busy.Contains(g.Id) && g.Main <= 0;
-        StatMain.Text = wait ? "…" : Hrs(g.Main);
-        StatExtra.Text = wait ? "…" : Hrs(g.Extra);
-        StatFull.Text = wait ? "…" : Hrs(g.Full);
-        string nd = g.Description ?? "";
-        bool descChanged = DescText.Text != nd;
-        DescText.Text = nd;
-        DescCard.Visibility = string.IsNullOrWhiteSpace(nd) ? Visibility.Collapsed : Visibility.Visible;
-        RenderMeta(g);
-        // New text in the fixed-size box: start reading it from the top.
-        if (descChanged) { descTarget = null; DescCard.ScrollToVerticalOffset(0); }
-        PlayLabel.Text = IsRunning(g) ? "Running" : "Play";
-        if (!busy.Contains(g.Id))
-        {
-            var notes = new List<string>();
-            if (g.HltbTried && !g.ManualHours && g.Main <= 0 && g.Extra <= 0 && g.Full <= 0)
-                notes.Add("Play time not found — enter it manually in Edit…");
-            if (g.TrailerTried && g.TrailerFile is null)
-                notes.Add("No trailer found — set a link in Edit… (details: %AppData%\\Lumen\\log.txt)");
-            // A logo link that didn't download is what leaves the title as plain text.
-            if (!string.IsNullOrWhiteSpace(g.LogoUrl) && g.Logo is null)
-                notes.Add("Logo link couldn't be loaded — check it in Edit… (details: %AppData%\\Lumen\\log.txt)");
-            Status.Text = string.Join("    ", notes);
-        }
-        if (animate) AnimateInfo();
-        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(SizeTrailer));   // content changed: re-fit
+        ++infoToken; infoFilled = false;
+        heroShown = null; SetHero(null);
+        Logo.Source = null; Logo.Visibility = Visibility.Collapsed;
+        TitleText.Text = ""; StatMain.Text = StatExtra.Text = StatFull.Text = ""; DescText.Text = "";
+        DescCard.Visibility = Visibility.Collapsed;
+        MetaCard.Visibility = Visibility.Collapsed;
+        PlayBtn.Visibility = Visibility.Collapsed;
+        trailerPath = null; trailerShown = false; Trailer.Stop(); ShowTrailer(false);
+        musicFor = null; musicPlaying = false; Music.Stop();
+        Hint.Visibility = games.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    // Genres / developer / publisher / release date in two columns; "additional content" (DLC) spans both below.
-    void RenderMeta(Game g)
+    // Keeps the trailer window proportional to the app window (16:9, bottom-right), and fits the info
+    // block around it. Layout units throughout, so it holds at any interface scale.
+    void SizeTrailer()
     {
-        bool genres = !string.IsNullOrWhiteSpace(g.Genres);
-        bool dev = !string.IsNullOrWhiteSpace(g.Developer);
-        bool pub = !string.IsNullOrWhiteSpace(g.Publisher);
-        bool rel = g.ReleaseText.Length > 0;
-        bool dlc = g.Dlc.Count > 0;
+        double pw = Page.ActualWidth > 0 ? Page.ActualWidth : ActualWidth;
+        double ph = Page.ActualHeight > 0 ? Page.ActualHeight : ActualHeight;
+        double heroH = Math.Max(200, ph - Shelf.ActualHeight - 60);
+        double w = Math.Clamp(pw * .26, 260, 640);
+        w = Math.Max(220, Math.Min(w, heroH * .55 * 16 / 9));
+        double h = w * 9 / 16;
+        TrailerBox.Width = TrailerSlot.Width = w;
+        TrailerBox.Height = TrailerSlot.Height = h;
+        TrailerBox.Clip = new RectangleGeometry(new Rect(0, 0, w, h), 12, 12);
 
-        MetaGenres.Text = g.Genres ?? "";
-        string devText = (g.Developer ?? "").Trim();
-        if (devText.Length > 80) devText = devText.Substring(0, 77) + "...";
-        MetaDev.Text = devText;
-        MetaPub.Text = g.Publisher ?? "";
-        MetaRelease.Text = g.ReleaseText;
-        MetaGenresRow.Visibility = genres ? Visibility.Visible : Visibility.Collapsed;
-        MetaDevRow.Visibility = devText.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
-        MetaPubRow.Visibility = pub ? Visibility.Visible : Visibility.Collapsed;
-        MetaReleaseRow.Visibility = rel ? Visibility.Visible : Visibility.Collapsed;
+        // Nothing may overlap: the info block (left) is shrunk to fit beside the trailer (right), below the top
+        // buttons / status line and above the shelf.
+        double right = pw - 40 - w - 32;                              // right-hand limit: the trailer's slot is always reserved
+        double hh = HeroGrid.ActualHeight > 0 ? HeroGrid.ActualHeight : heroH;
+        InfoFit.MaxWidth = Math.Max(200, right - 56);                 // 56 = its left margin
+        InfoFit.MaxHeight = Math.Max(90, hh - 36 - 60);               // 36 bottom margin, 60 = top buttons / status line
+        PadHint.MaxWidth = Math.Max(200, pw * .45);                   // the hint wraps rather than crowding the status line
+        StatusPanel.MaxWidth = Math.Max(160, pw - 56 - 24 - TopBar.ActualWidth - 24);   // stays clear of the hint + round buttons
 
-        DlcBlock.Visibility = dlc ? Visibility.Visible : Visibility.Collapsed;
-        DlcList.ItemsSource = dlc ? g.Dlc : null;
+        // The "additional content" list takes whatever height the rest of the block leaves, and scrolls beyond
+        // that, so the block can never grow past the shelf. Sizes are in layout units (text scale `t` included).
+        double t = Store.Settings.TextScale <= 0 ? 1.0 : Store.Settings.TextScale;
+        double title = TitleBox.ActualHeight;
+        double others = InfoPanel.ActualHeight - DlcScroll.ActualHeight * t - title;   // everything except title and DLC list
+        // keep room for a readable logo (110 + its 18 gap); the list scrolls inside what is left
+        DlcScroll.MaxHeight = Math.Max(40, (InfoFit.MaxHeight - others - 128) / t);
 
-        // The description and the play time both live in this grid, so it stays visible
-        // even when there is no other metadata.
-        bool desc = !string.IsNullOrWhiteSpace(g.Description);
-        DescCard.Visibility = desc ? Visibility.Visible : Visibility.Collapsed;
-        MetaCard.Visibility = Visibility.Visible;
+        // The logo gets whatever height the rest of the block leaves, so it scales down instead of being cut off.
+        logoMaxH = Math.Max(60, InfoFit.MaxHeight - (InfoPanel.ActualHeight - title));
+        FitLogo();
+
+        // The description column takes the width left beside the metadata (up to 340), so its text is never
+        // cut off at the right edge; the text just wraps onto more lines inside its fixed-height box.
+        double colsW = MetaCard.ColumnDefinitions[0].ActualWidth + MetaCard.ColumnDefinitions[1].ActualWidth;
+        double availW = (InfoFit.MaxWidth - MetaCard.Margin.Left) / t - colsW - DescCard.Margin.Left;
+        double dw = Math.Clamp(availW, 160, 340);
+        if (Math.Abs(DescCard.Width - dw) > .5) DescCard.Width = dw;
     }
 
     // ---------- Trailer (local file) ----------
     // Loads the trailer paused on a poster frame. The corner window stays hidden until the user
     // asks for it (Y), and the trailer only plays when asked (A, or clicking it).
+    // Opening a video file builds a whole media graph, which is by far the slowest thing that can
+    // happen while switching games — so the open is pushed behind the transition (Background priority
+    // only runs once the frame has rendered) and dropped if the selection has moved on meanwhile.
     void LoadTrailer(Game g)
     {
         if (g.TrailerFile is null || !File.Exists(g.TrailerFile))
         {
-            trailerPath = null; trailerPlaying = false; Trailer.Stop(); ShowTrailer(false);
+            trailerPath = null; trailerPlaying = false; ++trailerLoadToken; Trailer.Stop(); ShowTrailer(false);
             return;
         }
         if (trailerPath == g.TrailerFile)
@@ -576,10 +547,20 @@ public partial class MainWindow : Window
         trailerPath = g.TrailerFile;
         trailerPlaying = false;
         BigPlay.Visibility = Visibility.Visible;
-        Trailer.Stop();
-        Trailer.Volume = 0;
-        Trailer.Source = new Uri(g.TrailerFile);
-        Trailer.Play();               // opens the file; Trailer_Opened then pauses on a poster frame
+        int tok = ++trailerLoadToken;
+        string file = g.TrailerFile;
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        {
+            if (tok != trailerLoadToken) return;   // another game was selected meanwhile
+            try
+            {
+                Trailer.Stop();
+                Trailer.Volume = 0;
+                Trailer.Source = new Uri(file);
+                Trailer.Play();               // opens the file; Trailer_Opened then pauses on a poster frame
+            }
+            catch { }
+        }));
         ShowTrailer(trailerShown);    // hidden by default
         SetTargets();
     }
@@ -590,6 +571,44 @@ public partial class MainWindow : Window
         var d = Trailer.NaturalDuration.HasTimeSpan ? Trailer.NaturalDuration.TimeSpan.TotalSeconds : 0;
         Trailer.Position = TimeSpan.FromSeconds(Math.Min(3, d / 4));
         Trailer.Pause();
+    }
+
+    void ReleaseMedia()
+    {
+        Trailer.Stop(); Trailer.Close();
+        Music.Stop(); Music.Close();
+        trailerPath = null; trailerPlaying = false; musicPlaying = false;
+        musicFor = null;
+        ShowTrailer(false);
+    }
+
+    // The corner window is hidden by default: Y (or the film button) shows and hides it. It grows in
+    // from its corner and shrinks back out; a token makes sure a fade-out that is still running never
+    // collapses a window shown again meanwhile.
+    void ShowTrailer(bool on)
+    {
+        int tok = ++trailerToken;
+        if (on)
+        {
+            if (trailerPath is null) return;   // nothing to reveal yet
+            bool wasHidden = TrailerBox.Visibility != Visibility.Visible;
+            TrailerBox.Visibility = Visibility.Visible;
+            Anim(TrailerBox, OpacityProperty, wasHidden ? 0 : null, 1, 320, EaseOut);
+            Anim(TrailerScale, ScaleTransform.ScaleXProperty, wasHidden ? .9 : null, 1, 460, Settle);
+            Anim(TrailerScale, ScaleTransform.ScaleYProperty, wasHidden ? .9 : null, 1, 460, Settle);
+        }
+        else if (TrailerBox.Visibility == Visibility.Visible)
+        {
+            Anim(TrailerScale, ScaleTransform.ScaleXProperty, null, .94, 220, EaseIn);
+            Anim(TrailerScale, ScaleTransform.ScaleYProperty, null, .94, 220, EaseIn);
+            Anim(TrailerBox, OpacityProperty, null, 0, 220, EaseIn, 0, () =>
+            {
+                if (tok != trailerToken) return;
+                TrailerBox.BeginAnimation(OpacityProperty, null);
+                TrailerBox.Visibility = Visibility.Collapsed;
+            });
+        }
+        SizeTrailer();      // the info block makes room for the trailer, or takes the space back
     }
 
     void TrailerToggle_Click(object s, RoutedEventArgs e) => ToggleTrailer();
@@ -630,6 +649,16 @@ public partial class MainWindow : Window
 
     void SyncTrailerBtn() => TrBtn.ToolTip = trailerShown ? "Hide trailer (Y)" : "Show trailer (Y)";
 
+    void Trailer_Ended(object s, RoutedEventArgs e)
+    {
+        trailerPlaying = false;
+        BigPlay.Visibility = Visibility.Visible;
+        Trailer.Position = TimeSpan.Zero;
+        Trailer.Pause();
+        SetTargets();
+    }
+
+    // ---------- Fetching ----------
     bool NeedsWork(Game g) =>
         !g.Fetched || !g.TrailerTried || !g.MusicTried
         || (g.Main <= 0 && !g.ManualHours && !g.HltbTried)
@@ -659,6 +688,7 @@ public partial class MainWindow : Window
 
     void Say(Game g, string t) { if (cur == g) Status.Text = t; }
 
+    // ---------- Selection ----------
     void List_Sel(object s, SelectionChangedEventArgs e)
     {
         cur = List.SelectedItem as Game;
@@ -667,8 +697,41 @@ public partial class MainWindow : Window
         Render(cur, true);
         LoadTrailer(cur);
         SetTargets();                       // keep the selected game's theme playing
+        ScheduleWarm(cur);                  // pre-decode the neighbours once the selection settles
         Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(ScrollToSel));
         if (NeedsWork(cur)) _ = Fetch(cur);
+    }
+
+    // Pre-decodes the art of the games either side of g on a background thread, so stepping along the
+    // shelf finds the next banner already in Art's cache. It is debounced: while the selection is racing
+    // along (held button, fast scroll) nothing is queued, and only the spot where it comes to rest is warmed,
+    // so quick navigation never competes with the UI for CPU and memory. Art.Run also caps how many decodes
+    // run at once.
+    DispatcherTimer? warmTimer;
+    Game? warmFor;
+
+    void ScheduleWarm(Game g)
+    {
+        warmFor = g;
+        if (warmTimer is null)
+        {
+            warmTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(180) };
+            warmTimer.Tick += (_, _) =>
+            {
+                warmTimer!.Stop();
+                if (warmFor is { } w && ReferenceEquals(w, cur)) WarmNear(w);
+            };
+        }
+        warmTimer.Stop();
+        warmTimer.Start();   // restarts the countdown on every move
+    }
+
+    void WarmNear(Game g)
+    {
+        int i = games.IndexOf(g);
+        if (i < 0) return;
+        for (int k = Math.Max(0, i - 1); k <= Math.Min(games.Count - 1, i + 1); k++)
+            if (k != i) Art.Warm(games[k].Grid, games[k].Hero, games[k].Logo);
     }
 
     // ---------- Audio ----------
@@ -677,16 +740,19 @@ public partial class MainWindow : Window
     // plays, and launching a game pauses it until you come back.
     void SetTargets()
     {
-        bool trailer = trailerPlaying;
-        trailerTarget = muted || !trailer ? 0 : .6;
-        musicTarget = muted || trailer || paused ? 0 : .4;
+        trailerTarget = muted || !trailerPlaying ? 0 : .6;
+        musicTarget = muted || trailerPlaying || paused ? 0 : .4;
         if (musicTarget > 0) SyncMusic();
     }
 
-    static void Step(MediaElement m, double target)
+    // Eases a volume towards its target at a steady rate (per second), so fades don't depend on frame rate.
+    // Fades in are gentler than fades out, so a new theme swells in rather than appearing.
+    static void Ramp(MediaElement m, double target, double dt)
     {
-        var d = target - m.Volume;
-        m.Volume = Math.Abs(d) < .04 ? target : m.Volume + Math.Sign(d) * .04;
+        double v = m.Volume, d = target - v;
+        if (d == 0) return;
+        double step = (d > 0 ? .9 : 2.2) * dt;
+        m.Volume = Math.Abs(d) <= step ? target : v + Math.Sign(d) * step;
     }
 
     // Loads (if needed) the selected game's theme, so the music always matches the banner.
@@ -696,12 +762,36 @@ public partial class MainWindow : Window
     }
 
     // Plays g's theme; returns false when the game has no playable theme file/link.
+    // Switching themes is staged so moving between games never stalls or clicks: the current theme
+    // fades out (target 0), and the frame loop opens the new file only once the old one is silent —
+    // opening audio builds a media graph, which is exactly the kind of work that must not happen in the
+    // middle of the banner crossfade. The new theme then fades back in.
+    Game? musicWant;
+    string? musicWantFile;
+
     bool PlayMusic(Game g)
     {
         var u = g.CustomTheme ?? g.MusicFile;
-        if (string.IsNullOrEmpty(u)) return false;
-        if (!u.StartsWith("http", StringComparison.OrdinalIgnoreCase) && !File.Exists(u)) return false;
-        if (musicFor is not null && musicFor.Id == g.Id && musicPlaying && Music.Source is not null) return true;
+        if (string.IsNullOrEmpty(u) || (!u.StartsWith("http", StringComparison.OrdinalIgnoreCase) && !File.Exists(u)))
+        { musicWant = null; musicWantFile = null; return false; }
+        if (musicFor is not null && musicFor.Id == g.Id && musicPlaying && Music.Source is not null
+            && musicWant is null) return true;
+        if (musicWant == g && musicWantFile == u) return true;   // already on its way in
+
+        musicWant = g;
+        musicWantFile = u;
+        musicTarget = 0;                     // fade the current theme out; the frame loop opens the new one
+        return true;
+    }
+
+    // The staged theme swap: only once the outgoing theme is silent, and only for the game that is
+    // still selected (a fast flick through the shelf must not open every file it passed over).
+    void OpenWantedTheme()
+    {
+        if (musicWant is not { } g || musicWantFile is not { } u) return;
+        if (Music.Volume > .02) return;      // still fading the old one out
+        if (cur != g) { musicWant = null; musicWantFile = null; return; }
+        musicWant = null;
         try
         {
             Music.Stop();
@@ -710,9 +800,9 @@ public partial class MainWindow : Window
             Music.Play();
             musicPlaying = true;
             musicFor = g;
-            return true;
         }
-        catch { return false; }
+        catch { musicPlaying = false; musicFor = null; musicTarget = 0; }
+        SetTargets();                        // fade the new theme in
     }
 
     void Music_Ended(object s, RoutedEventArgs e) { Music.Position = TimeSpan.Zero; Music.Play(); }
@@ -722,14 +812,6 @@ public partial class MainWindow : Window
     {
         Store.Log("Music playback failed: " + (e.ErrorException?.Message ?? "unknown"));
         musicPlaying = false; musicFor = null; musicTarget = 0;
-    }
-    void Trailer_Ended(object s, RoutedEventArgs e)
-    {
-        trailerPlaying = false;
-        BigPlay.Visibility = Visibility.Visible;
-        Trailer.Position = TimeSpan.Zero;
-        Trailer.Pause();
-        SetTargets();
     }
 
     void Mute_Click(object s, RoutedEventArgs e) => ToggleMute();
@@ -741,54 +823,65 @@ public partial class MainWindow : Window
         SetTargets();
     }
 
-    // ---------- Main tick: volume fades, smooth scrolling, controller ----------
-    void Tick(object? s, EventArgs e)
+    // ---------- Frame loop: volume fades, smooth scrolling, controller ----------
+    void OnFrame(object? s, EventArgs e)
     {
-        Step(Trailer, trailerTarget);
-        Step(Music, musicTarget);
-        if (musicTarget == 0 && Music.Volume == 0 && musicPlaying) { Music.Stop(); musicPlaying = false; }
+        var now = ((RenderingEventArgs)e).RenderingTime;
+        if (now == lastFrame) return;                       // WPF can raise this twice for one frame
+        double dt = lastFrame == TimeSpan.Zero ? 1 / 60.0 : Math.Min(.1, (now - lastFrame).TotalSeconds);
+        lastFrame = now;
 
-        var v = Sv();
-        if (v != null && scrollTarget is { } t)
-        {
-            var d = t - v.HorizontalOffset;
-            if (Math.Abs(d) < .5) { v.ScrollToHorizontalOffset(t); scrollTarget = null; }
-            else v.ScrollToHorizontalOffset(v.HorizontalOffset + d * .18);
-        }
+        Ramp(Trailer, trailerTarget, dt);
+        Ramp(Music, musicTarget, dt);
+        if (musicTarget == 0 && Music.Volume == 0 && musicPlaying) { Music.Stop(); musicPlaying = false; }
+        OpenWantedTheme();   // staged theme swap: open the new file only once the old one is silent
+
+        GlideScroll(ScrollOf(List), ref shelfTarget, true, dt, 14);
+        GlideScroll(navOpen ? ScrollOf(NavList) : null, ref gridTarget, false, dt, 16);
 
         // Smooth scrolling of the fixed-size description box (controller).
-        if (descTarget is { } dt)
+        if (descTarget is not null)
         {
             if (DescCard.Visibility != Visibility.Visible || DescCard.ScrollableHeight <= 0) descTarget = null;
-            else
-            {
-                var d = dt - DescCard.VerticalOffset;
-                if (Math.Abs(d) < .5) { DescCard.ScrollToVerticalOffset(dt); descTarget = null; }
-                else DescCard.ScrollToVerticalOffset(DescCard.VerticalOffset + d * .25);
-            }
+            else GlideScroll(DescCard, ref descTarget, false, dt, 18);
         }
 
         PollPad();
     }
 
-    ScrollViewer? Sv()
+    // Eases `now` towards `target`; the share of the remaining distance covered per second is set by
+    // `rate`, so it looks the same at 60 and at 144 Hz. Returns false once it has arrived.
+    static bool Glide(double now, double target, double dt, double rate, out double next)
     {
-        if (sv != null) return sv;
-        if (VisualTreeHelper.GetChildrenCount(List) > 0)
-            sv = (VisualTreeHelper.GetChild(List, 0) as Border)?.Child as ScrollViewer;
-        return sv;
+        double d = target - now;
+        if (Math.Abs(d) < .5) { next = target; return false; }
+        next = now + d * (1 - Math.Exp(-rate * dt));
+        return true;
     }
+
+    static void GlideScroll(ScrollViewer? v, ref double? target, bool horizontal, double dt, double rate)
+    {
+        if (v is null || target is not { } t) return;
+        bool moving = Glide(horizontal ? v.HorizontalOffset : v.VerticalOffset, t, dt, rate, out var next);
+        if (horizontal) v.ScrollToHorizontalOffset(next); else v.ScrollToVerticalOffset(next);
+        if (!moving) target = null;
+    }
+
+    // The ScrollViewer inside a ListBox's default template.
+    static ScrollViewer? ScrollOf(ListBox lb) =>
+        VisualTreeHelper.GetChildrenCount(lb) > 0 && VisualTreeHelper.GetChild(lb, 0) is Border { Child: ScrollViewer sv } ? sv : null;
 
     void ScrollToSel()
     {
-        var v = Sv();
-        if (v is null || cur is null) return;
+        if (ScrollOf(List) is not { } v || cur is null) return;
         if (List.ItemContainerGenerator.ContainerFromItem(cur) is not FrameworkElement c) return;
         var x = c.TranslatePoint(new Point(0, 0), List).X + v.HorizontalOffset;
-        scrollTarget = Math.Clamp(x - (v.ViewportWidth - c.ActualWidth) / 2, 0, v.ScrollableWidth);
+        shelfTarget = Math.Clamp(x - (v.ViewportWidth - c.ActualWidth) / 2, 0, v.ScrollableWidth);
     }
 
     // ---------- Controller ----------
+    const string ShelfHint = "SELECT Grid    START Play    Trailer:    A Play    Y Show    X Mute";
+
     void PollPad()
     {
         if (!Pad.Poll(out var b, out var lx, out var ly))
@@ -797,18 +890,21 @@ public partial class MainWindow : Window
             {
                 padConnected = false;
                 prevButtons = 0; dirHeld = 0; vDirHeld = 0;   // no stale presses on reconnect
-                PadHint.Visibility = Visibility.Collapsed;
+                PadHint.Visibility = NavHint.Visibility = Visibility.Collapsed;
             }
             return;
         }
-        if (!padConnected) { padConnected = true; PadHint.Visibility = Visibility.Visible; }
-        // With an empty library there is nothing to launch, so Start offers the one thing that matters.
-        PadHint.Text = games.Count == 0
-            ? "START Add game"
-            : "START Play    A Play Trailer    Y Show Trailer    X Mute Trailer    B Back";
+        if (!padConnected) { padConnected = true; PadHint.Visibility = NavHint.Visibility = Visibility.Visible; }
 
         var pressed = (ushort)(b & ~prevButtons);
         prevButtons = b;
+
+        // SELECT slides the all-games pane up / away.
+        if ((pressed & Pad.Select) != 0) ToggleNav();
+
+        // With an empty library there is nothing to launch, so Start offers the one thing that matters.
+        PadHint.Text = games.Count == 0 ? "START Add game" : ShelfHint;
+
         if (!IsActive) { dirHeld = 0; vDirHeld = 0; return; }   // don't react while a game (or a dialog) has focus
 
         // Shelf: left/right, or the left stick.
@@ -823,10 +919,15 @@ public partial class MainWindow : Window
         dirHeld = dir;
         if ((pressed & Pad.RB) != 0) move = 1;
         if ((pressed & Pad.LB) != 0) move = -1;
-        if (move != 0) PadMove(move);
+        if (move != 0)
+        {
+            if (navOpen) NavMove(move);     // inside the grid: step one cover
+            else PadMove(move);
+        }
 
         // Description: up/down, or the left stick, reads through the fixed-size box.
-        int vdir = (b & Pad.Down) != 0 || ly > 16000 ? 1 : (b & Pad.Up) != 0 || ly < -16000 ? -1 : 0;
+        // Inside the grid the same buttons step a whole row instead.
+        int vdir = (b & Pad.Down) != 0 || ly < -16000 ? 1 : (b & Pad.Up) != 0 || ly > 16000 ? -1 : 0;   // XInput's stick Y is up-positive
         int vstep = 0;
         if (vdir != 0)
         {
@@ -834,22 +935,32 @@ public partial class MainWindow : Window
             else if (now >= vNextRepeat) { vstep = vdir; vNextRepeat = now.AddMilliseconds(90); }
         }
         vDirHeld = vdir;
-        if (vstep != 0) ScrollDesc(vstep);
+        if (vstep != 0)
+        {
+            if (navOpen) NavMove(vstep * NavCols());
+            else ScrollDesc(vstep);
+        }
 
         // START launches the game (or adds one when the library is empty); A plays the trailer,
-        // Y shows/hides the trailer window, X mutes it.
+        // Y shows/hides the trailer window, X mutes it. With the grid open: B backs out of it
+        // (the selection stays where it was), A / START keep the highlighted cover.
+        if ((pressed & Pad.B) != 0 && navOpen) { CloseNav(false); return; }
         if ((pressed & Pad.Start) != 0)
         {
+            if (navOpen) CloseNav(true);
             if (games.Count == 0) Add_Click(this, new RoutedEventArgs());
             else Play_Click(null, null);
         }
-        if ((pressed & Pad.A) != 0) ToggleTrailer();
+        if ((pressed & Pad.A) != 0)
+        {
+            if (navOpen) CloseNav(true);
+            else ToggleTrailer();
+        }
         if ((pressed & Pad.Y) != 0) ToggleTrailerBox();
         if ((pressed & Pad.X) != 0) ToggleMute();
-        if ((pressed & Pad.B) != 0 && full) ToggleFull();
     }
 
-    // Scrolls the description by two lines at a time; Tick eases it towards this target.
+    // Scrolls the description by two lines at a time; the frame loop eases it towards this target.
     void ScrollDesc(int dir)
     {
         if (DescCard.Visibility != Visibility.Visible || DescCard.ScrollableHeight <= 0) return;
@@ -864,6 +975,156 @@ public partial class MainWindow : Window
         List.SelectedIndex = i;            // List_Sel starts the newly selected game's theme
     }
 
+    // ---------- All-games pane ----------
+    // A full-page pane that slides up over everything: the banner, the info block and the shelf stay
+    // exactly where they are and are simply covered, so nothing is resized or re-laid-out while it moves
+    // (it only translates, which the GPU does without touching layout). It sits parked below the window,
+    // Hidden but still laid out, so its covers are ready and the first open doesn't hitch.
+    //
+    // The page behind does not follow the highlight while the pane is up (it is hidden anyway); the pick
+    // is applied as the pane starts to leave, so the new banner fades in underneath it as it slides down.
+    bool navOpen;
+    bool paneParked = true;                          // fully off-screen (so the next open starts from below)
+
+    const double NavTileW = 142;                     // 132px cover + the item's 5px margin on each side
+
+    void ToggleNav() { if (navOpen) CloseNav(true); else OpenNav(); }
+
+    double PageHeight => Page.ActualHeight > 0 ? Page.ActualHeight : ActualHeight;
+
+    void OpenNav()
+    {
+        if (games.Count == 0 || navOpen) return;
+        NavList.SelectedItem = cur ?? games[0];      // (before navOpen: Nav_Sel must not animate this)
+        navOpen = true;
+        gridTarget = null;
+
+        GridPane.Visibility = Visibility.Visible;
+        NavList.UpdateLayout();
+        CenterOnSelection();                          // already in view when the pane arrives
+        NavList.Focus();
+        NavDim.IsHitTestVisible = true;
+
+        double from = paneParked ? PageHeight : PaneShift.Y;
+        paneParked = false;
+        Anim(PaneShift, TranslateTransform.YProperty, from, 0, 520, Decel);
+        Anim(NavDim, OpacityProperty, null, .55, 380, EaseOut);
+    }
+
+    // keepSelection: the highlighted cover becomes the selected game (SELECT / A / Enter / a click).
+    // Otherwise the pane just leaves and nothing changes (Esc / B / a click outside).
+    void CloseNav(bool keepSelection)
+    {
+        if (!navOpen) return;
+        navOpen = false;
+        gridTarget = null;
+        var pick = keepSelection ? NavList.SelectedItem as Game : null;
+        if (NavList.IsKeyboardFocusWithin) List.Focus();   // hand the keys back to the row
+
+        double h = PageHeight;
+        Anim(NavDim, OpacityProperty, null, 0, 340, EaseOut);
+        Anim(PaneShift, TranslateTransform.YProperty, null, h, 360, EaseInOut, 0, () =>
+        {
+            if (navOpen) return;                           // reopened meanwhile
+            Snap(PaneShift, TranslateTransform.YProperty, h);
+            GridPane.Visibility = Visibility.Hidden;
+            NavDim.IsHitTestVisible = false;
+            paneParked = true;
+
+            // The switch itself (banner crossfade, info fade, trailer + music load) runs only now that
+            // the slide is over, so none of that work competes with the pane's animation frames.
+            if (pick is not null && !ReferenceEquals(List.SelectedItem, pick)) List.SelectedItem = pick;
+        });
+
+        // Meanwhile, decode the pick's art on a background thread so it is already warm when the switch happens.
+        if (pick is not null && !ReferenceEquals(List.SelectedItem, pick))
+            Art.Warm(pick.Grid, pick.Hero, pick.Logo);
+    }
+
+    // Brings the highlighted tile to the middle of the grid at once (used while the pane is still off-screen).
+    void CenterOnSelection()
+    {
+        if (TileTop(NavList.SelectedItem) is not { } top || ScrollOf(NavList) is not { } v) return;
+        double mid = top + 222 / 2.0 - v.ViewportHeight / 2;
+        v.ScrollToVerticalOffset(Math.Clamp(mid, 0, v.ScrollableHeight));
+    }
+
+    // Eases the grid just far enough to show the highlighted tile (with a little room for its lift).
+    void RevealSelection()
+    {
+        if (TileTop(NavList.SelectedItem) is not { } top || ScrollOf(NavList) is not { } v) return;
+        const double room = 24;
+        double t = v.VerticalOffset, bottom = top + 222;
+        if (top - room < t) t = top - room;
+        else if (bottom + room > t + v.ViewportHeight) t = bottom + room - v.ViewportHeight;
+        gridTarget = Math.Clamp(t, 0, v.ScrollableHeight);
+    }
+
+    // Top edge of a tile in the grid's scrolled content, or null when it has no container (yet).
+    double? TileTop(object? item)
+    {
+        if (item is null || ScrollOf(NavList) is not { } v) return null;
+        if (NavList.ItemContainerGenerator.ContainerFromItem(item) is not FrameworkElement c || c.ActualHeight <= 0) return null;
+        return c.TranslatePoint(new Point(0, 0), v).Y + v.VerticalOffset;
+    }
+
+    // How many covers fit on a row right now, so up/down steps a whole row instead of one tile.
+    int NavCols()
+    {
+        double w = ScrollOf(NavList)?.ViewportWidth ?? 0;
+        if (w <= 0) w = NavList.ActualWidth > 0 ? NavList.ActualWidth : ActualWidth - 84;
+        return Math.Max(1, (int)(w / NavTileW));
+    }
+
+    void NavMove(int d)
+    {
+        if (games.Count == 0) return;
+        var i = Math.Clamp((NavList.SelectedIndex < 0 ? 0 : NavList.SelectedIndex) + d, 0, games.Count - 1);
+        if (i != NavList.SelectedIndex) NavList.SelectedIndex = i;   // Nav_Sel scrolls it into view
+    }
+
+    void Nav_Sel(object s, SelectionChangedEventArgs e)
+    {
+        if (navOpen) RevealSelection();
+    }
+
+    // A click picks that cover and slides the pane away.
+    void Nav_Pick(object s, MouseButtonEventArgs e)
+    {
+        var item = ItemsControl.ContainerFromElement(NavList, e.OriginalSource as DependencyObject) as ListBoxItem;
+        if (item?.Content is not Game g) return;
+        e.Handled = true;                       // the pane owns the press: no double-click play through
+        NavList.SelectedItem = g;
+        CloseNav(true);
+    }
+
+    void Nav_Wheel(object s, MouseWheelEventArgs e)
+    {
+        if (ScrollOf(NavList) is not { } v) return;
+        gridTarget = Math.Clamp((gridTarget ?? v.VerticalOffset) - e.Delta * 1.3, 0, v.ScrollableHeight);
+        e.Handled = true;
+    }
+
+    // Arrow keys move by tile / row (the ListBox's own arrows would step one item at a time), Enter picks.
+    void Nav_Key(object s, KeyEventArgs e)
+    {
+        int step = e.Key switch
+        {
+            Key.Left => -1, Key.Right => 1,
+            Key.Up => -NavCols(), Key.Down => NavCols(),
+            Key.Home => -games.Count, Key.End => games.Count,
+            _ => 0
+        };
+        if (step != 0) { NavMove(step); e.Handled = true; }
+        else if (e.Key == Key.Enter) { CloseNav(true); e.Handled = true; }
+    }
+
+    void Nav_Close_Click(object s, MouseButtonEventArgs e) => CloseNav(false);
+    void NavDone_Click(object s, RoutedEventArgs e) => CloseNav(true);
+
+    // The toolbar button (the mouse/keyboard twin of SELECT).
+    void Nav_Toolbar_Click(object s, RoutedEventArgs e) => ToggleNav();
+
     // ---------- Shelf interaction ----------
     void Cover_Right(object s, MouseButtonEventArgs e)
     {
@@ -877,9 +1138,8 @@ public partial class MainWindow : Window
 
     void List_Wheel(object s, MouseWheelEventArgs e)
     {
-        var v = Sv();
-        if (v is null) return;
-        scrollTarget = Math.Clamp((scrollTarget ?? v.HorizontalOffset) - e.Delta * 1.2, 0, v.ScrollableWidth);
+        if (ScrollOf(List) is not { } v) return;
+        shelfTarget = Math.Clamp((shelfTarget ?? v.HorizontalOffset) - e.Delta * 1.2, 0, v.ScrollableWidth);
         e.Handled = true;
     }
 
@@ -979,10 +1239,11 @@ public partial class MainWindow : Window
 
     void EndLaunch(Game g)
     {
-        if (running.TryGetValue(g.Id, out var p)) { running.Remove(g.Id); try { p.Dispose(); } catch { } }
+        if (running.Remove(g.Id, out var p)) { try { p.Dispose(); } catch { } }
         if (cur == g) PlayLabel.Text = "Play";
     }
 
+    // ---------- Add / edit / remove ----------
     static void ApplyDialog(Game g, GameDialog d)
     {
         g.Name = d.NameBox.Text.Trim();
@@ -1034,21 +1295,26 @@ public partial class MainWindow : Window
         if (d.ShowDialog() != true) return;
 
         ApplyDialog(cur, d);
-        if (n0 != cur.Name || hu0 != (cur.HltbUrl ?? "") || (manual0 && !cur.ManualHours))
+        bool renamed = n0 != cur.Name;
+        if (renamed || hu0 != (cur.HltbUrl ?? "") || (manual0 && !cur.ManualHours))
         {
             cur.HltbTried = false; cur.HltbIdTried = false;
-            if (n0 != cur.Name) cur.HltbGameId = null;
+            if (renamed) cur.HltbGameId = null;
             if (!cur.DescManual) cur.DescVer = 0;
             cur.MetaVer = 0;
         }
-        if (n0 != cur.Name) { cur.SteamId = null; if (cur.Description == desc0) { cur.Description = ""; cur.DescVer = 0; cur.DescManual = false; } }
+        if (renamed) { cur.SteamId = null; if (cur.Description == desc0) { cur.Description = ""; cur.DescVer = 0; cur.DescManual = false; } }
         if (desc0 != "" && cur.Description == "") cur.Fetched = false;
         if (tu0 != (cur.TrailerUrl ?? "")) { ReleaseMedia(); Assets.DeleteTrailer(cur); cur.TrailerTried = false; }
         if (mu0 != (cur.MusicUrl ?? "")) { ReleaseMedia(); Assets.DeleteMusic(cur); cur.MusicTried = false; }
-        if (hu0 != (cur.HltbUrl ?? "")) { cur.ManualHours = false; cur.Main = cur.Extra = cur.Full = 0; hltbRetried.Remove(cur.Id); }
+        if (hu0 != (cur.HltbUrl ?? "")) { cur.ManualHours = false; cur.Main = cur.Extra = cur.Full = 0; }
         bool artChanged = a0 != cur.GridUrl + "|" + cur.HeroUrl + "|" + cur.LogoUrl;
         if (artChanged) { cur.Grid = cur.Hero = cur.Logo = null; }
-        if (artChanged || n0 != cur.Name) { cur.Fetched = false; if (n0 != cur.Name) { Assets.Delete(cur); Assets.DeleteArt(cur); cur.TrailerTried = cur.MusicTried = false; trailerPath = null; } }
+        if (artChanged || renamed)
+        {
+            cur.Fetched = false;
+            if (renamed) { Assets.Delete(cur); Assets.DeleteArt(cur); cur.TrailerTried = cur.MusicTried = false; trailerPath = null; }
+        }
         if (manual0 && !cur.ManualHours) cur.Fetched = false;
         Store.Save();
         cur.Refresh();
@@ -1119,15 +1385,5 @@ public partial class MainWindow : Window
         Store.Settings.TextScale = r.text;
         Store.Save();
         ApplyScale();
-    }
-
-    // Live preview while a scale slider moves (not persisted until Save). `t` scales the info text only.
-    void PreviewScale(double s, double t)
-    {
-        if (s <= 0) s = 1.0;
-        if (t <= 0) t = 1.0;
-        Page.LayoutTransform = new ScaleTransform(s, s);
-        MetaCard.LayoutTransform = new ScaleTransform(t, t);
-        SizeTrailer();
     }
 }

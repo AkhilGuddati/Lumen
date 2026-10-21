@@ -10,6 +10,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using System.Windows.Media;
 
 namespace Lumen;
 
@@ -69,6 +70,21 @@ public class Game : INotifyPropertyChanged
     public int MusicVer { get; set; }         // 1 = downloaded/remuxed with ffmpeg (fixes the DASH m4a noise)
 
     [JsonIgnore] public bool NoGrid => Grid is null;
+
+    // The cover shown on the shelf and in the SELECT grid, read straight out of Art's cache so the
+    // binding never decodes pixels on the UI thread (a shelf of covers used to do exactly that while
+    // the containers were being created — the hitch you saw when the grid slid up). A cache miss
+    // starts a background decode and raises Art.Decoded, which refreshes this game once it lands.
+    [JsonIgnore]
+    public ImageSource? GridArt
+    {
+        get
+        {
+            var img = Art.Cached(Grid, Art.CoverMaxW);
+            if (img is null) Art.Ensure(Grid, Art.CoverMaxW);   // miss: decode in the background, repaint when ready
+            return img;
+        }
+    }
 
     public event PropertyChangedEventHandler? PropertyChanged;
     public void Refresh() => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(""));
@@ -140,28 +156,87 @@ public static class Store
         try { Settings = JsonSerializer.Deserialize<Settings>(File.ReadAllText(F("settings.json"))) ?? new(); } catch { }
     }
 
+    // Saving is called all over the place (every fetch step, every edit), so it must be cheap: the JSON is
+    // serialised right here (a snapshot of this moment), and the disk write happens on a worker thread.
+    // Saves that arrive while a write is running are coalesced: only the newest snapshot is written next.
+    static readonly object saveLock = new();
+    static string? pendingGames, pendingSettings;
+    static bool writing;
+
     public static void Save()
     {
         try
         {
-            File.WriteAllText(F("games.json"), JsonSerializer.Serialize(Games, J));
-            File.WriteAllText(F("settings.json"), JsonSerializer.Serialize(Settings, J));
+            var g = JsonSerializer.Serialize(Games, J);
+            var s = JsonSerializer.Serialize(Settings, J);
+            lock (saveLock)
+            {
+                pendingGames = g;
+                pendingSettings = s;
+                if (writing) return;
+                writing = true;
+            }
+            Task.Run(Flush);
         }
         catch { }
+    }
+
+    // Writes whatever is pending (on exit, so the last change is never lost to a background thread).
+    public static void SaveNow()
+    {
+        Save();
+        Flush();
+    }
+
+    static void Flush()
+    {
+        while (true)
+        {
+            string? g, s;
+            lock (saveLock)
+            {
+                g = pendingGames; s = pendingSettings;
+                pendingGames = pendingSettings = null;
+                if (g is null || s is null) { writing = false; return; }
+            }
+            try
+            {
+                Directory.CreateDirectory(Dir);
+                WriteAtomic("games.json", g);
+                WriteAtomic("settings.json", s);
+            }
+            catch (Exception ex) { Log("Save failed: " + ex.Message); }
+        }
+    }
+
+    // Write to a temp file and swap it in, so a crash mid-write can never leave a half-written library.
+    static void WriteAtomic(string name, string text)
+    {
+        var tmp = F(name + ".tmp");
+        File.WriteAllText(tmp, text);
+        File.Move(tmp, F(name), true);
     }
 }
 
 // ================= Artwork + HowLongToBeat =================
+static class Net
+{
+    public static HttpClient Client(TimeSpan timeout)
+    {
+        var c = new HttpClient { Timeout = timeout };
+        c.DefaultRequestHeaders.UserAgent.ParseAdd(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36");
+        return c;
+    }
+}
+
 public static class Meta
 {
-    internal static readonly HttpClient H = new() { Timeout = TimeSpan.FromSeconds(30) };
-
-    static Meta() => H.DefaultRequestHeaders.UserAgent.ParseAdd(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36");
+    internal static readonly HttpClient H = Net.Client(TimeSpan.FromSeconds(30));
 
     public static async Task Fill(Game g, bool force = false)
     {
-        await Task.WhenAll(Art(g, force), Task.Run(async () => { await Hltb(g); await Desc(g); }));
+        await Task.WhenAll(Artwork(g, force), Task.Run(async () => { await Hltb(g); await Desc(g); }));
         g.Fetched = true;
         Store.Save();
         g.Refresh();
@@ -192,21 +267,6 @@ public static class Meta
         catch (Exception ex) { Store.Log("Steam lookup failed: " + ex.Message); return null; }
     }
 
-    // Cut long text at a sentence end (or a word boundary), never mid-word.
-    internal static string Short(string s, int max = 420)
-    {
-        s = Regex.Replace(s, @"\s+", " ").Trim();
-        if (s.Length <= max) return s;
-        var cut = s[..max];
-        var i = cut.LastIndexOfAny(new[] { '.', '!', '?' });
-        if (i > 80) return cut[..(i + 1)];
-        var sp = cut.LastIndexOf(' ');
-        return (sp > 40 ? cut[..sp] : cut).TrimEnd(' ', ',', ';', ':', '-') + "…";
-    }
-
-    static string Plain(string html) =>
-        Regex.Replace(System.Net.WebUtility.HtmlDecode(Regex.Replace(html, "<.*?>", " ")), @"\s+", " ").Trim();
-
     // Steam's whole "About this game" section as plain text (paragraph breaks and bullet points kept).
     static string? FullText(string? html)
     {
@@ -220,7 +280,7 @@ public static class Meta
         foreach (var l in lines)
         {
             if (l.Length == 0) { blanks++; continue; }
-            if (sb.Length > 0) sb.Append(blanks > 0 || l.Length > 0 ? "\n" : "").Append(blanks > 0 ? "\n" : "");
+            if (sb.Length > 0) sb.Append(blanks > 0 ? "\n\n" : "\n");   // a blank line between paragraphs
             sb.Append(l);
             blanks = 0;
         }
@@ -268,8 +328,7 @@ public static class Meta
                 if (r is not JsonObject ro) continue;
                 var name = Clean(ro["game_name"]?.ToString());
                 if (name is null) continue;
-                double H(string k) => double.TryParse(ro[k]?.ToString(), out var v) ? v / 3600.0 : 0;
-                var d = new Dlc { Name = name, Main = H("comp_main"), Extra = H("comp_plus"), Full = H("comp_100") };
+                var d = new Dlc { Name = name, Main = Hours(ro, "comp_main"), Extra = Hours(ro, "comp_plus"), Full = Hours(ro, "comp_100") };
                 if (d.Main > 0 || d.Extra > 0 || d.Full > 0) dlc.Add(d);
             }
         g.Dlc = dlc;
@@ -277,6 +336,9 @@ public static class Meta
     }
 
     static string? Clean(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+
+    // HowLongToBeat stores play times in seconds.
+    static double Hours(JsonNode? n, string key) => double.TryParse(n?[key]?.ToString(), out var v) ? v / 3600.0 : 0;
 
     // Oldest of the four regional release dates (the user asked for the earliest one).
     static string? OldestRelease(JsonObject g)
@@ -346,7 +408,7 @@ public static class Meta
         return null;
     }
 
-    static async Task Art(Game g, bool force)
+    static async Task Artwork(Game g, bool force)
     {
         try
         {
@@ -401,17 +463,8 @@ public static class Meta
 
     // ---- HowLongToBeat (no official API): 1) your link  2) site search API  3) web search + game page ----
     // Lookups run one at a time, retry on temporary failures, and try several spellings of the game's name.
-    static string? hltbEp;
-    static readonly SemaphoreSlim hltbGate = new(1, 1);
-    static readonly HttpClient HT = CreateHt();
-
-    static HttpClient CreateHt()
-    {
-        var c = new HttpClient { Timeout = TimeSpan.FromSeconds(12) };
-        c.DefaultRequestHeaders.UserAgent.ParseAdd(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36");
-        return c;
-    }
+    const string HltbEndpoint = "search/site";
+    static readonly HttpClient HT = Net.Client(TimeSpan.FromSeconds(12));
 
     static string Norm(string s) => Regex.Replace(s.ToLowerInvariant(), "[^a-z0-9]", "");
 
@@ -451,7 +504,7 @@ public static class Meta
     {
         var link = HltbId(g.HltbUrl);
         bool needTimes = !g.ManualHours && !g.HltbTried;
-        bool needId = link is null && g.HltbGameId is null && !g.HltbIdTried && !g.DescManual && g.DescVer < 7;
+        bool needId = link is null && g.HltbGameId is null && !g.HltbIdTried && !g.DescManual && g.DescVer < DescVersion;
         if (!needTimes && !needId) return;
         g.HltbTried = true;
         g.HltbIdTried = true;
@@ -461,9 +514,7 @@ public static class Meta
             if (link != null) ok = await HltbPage(g, link);
             else
             {
-                var ep = hltbEp ?? "search/site";
-                ok = await HltbTry(g, ep, g.Name) > 0;
-                if (ok) hltbEp = ep;
+                ok = await HltbTry(g, g.Name) > 0;
             }
             Store.Log(ok ? $"HLTB: '{g.Name}' -> id {g.HltbGameId}, {g.Main:0.#}/{g.Extra:0.#}/{g.Full:0.#} h"
                          : $"HLTB: nothing for '{g.Name}' - enter times / description manually in Edit");
@@ -502,14 +553,14 @@ public static class Meta
     }
 
     // 1 = found times, 0 = endpoint works but no match, -1 = endpoint failed (blocked / changed / offline)
-    static async Task<int> HltbTry(Game g, string ep, string term)
+    static async Task<int> HltbTry(Game g, string term)
     {
         try
         {
             var init = JsonNode.Parse(await HT.GetStringAsync(
-                $"https://howlongtobeat.com/api/{ep}/init?t={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}"));
+                $"https://howlongtobeat.com/api/{HltbEndpoint}/init?t={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}"));
             var tok = init?["token"]?.ToString();
-            if (tok is null) { Store.Log($"HLTB /api/{ep}/init: no token"); return -1; }
+            if (tok is null) { Store.Log($"HLTB /api/{HltbEndpoint}/init: no token"); return -1; }
             string? hk = init?["hpKey"]?.ToString(), hv = init?["hpVal"]?.ToString();
 
             var body = new JsonObject
@@ -523,7 +574,7 @@ public static class Meta
             };
             if (hk != null && hv != null) body[hk] = hv;
 
-            using var req = new HttpRequestMessage(HttpMethod.Post, "https://howlongtobeat.com/api/" + ep)
+            using var req = new HttpRequestMessage(HttpMethod.Post, "https://howlongtobeat.com/api/" + HltbEndpoint)
             { Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json") };
             req.Headers.Add("x-auth-token", tok);
             if (hk != null && hv != null) { req.Headers.Add("x-hp-key", hk); req.Headers.Add("x-hp-val", hv); }
@@ -533,22 +584,21 @@ public static class Meta
 
             using var res = await HT.SendAsync(req);
             var text = await res.Content.ReadAsStringAsync();
-            if (!res.IsSuccessStatusCode) { Store.Log($"HLTB /api/{ep}: HTTP {(int)res.StatusCode} {Snip(text)}"); return -1; }
+            if (!res.IsSuccessStatusCode) { Store.Log($"HLTB /api/{HltbEndpoint}: HTTP {(int)res.StatusCode} {Snip(text)}"); return -1; }
             var arr = JsonNode.Parse(text)?["data"] as JsonArray;
-            if (arr is null) { Store.Log($"HLTB /api/{ep}: unexpected reply {Snip(text)}"); return -1; }
+            if (arr is null) { Store.Log($"HLTB /api/{HltbEndpoint}: unexpected reply {Snip(text)}"); return -1; }
 
             var hit = Best(arr, g.Name);
-            if (hit is null) { Store.Log($"HLTB /api/{ep}: no match for '{term}' ({arr.Count} results)"); return 0; }
+            if (hit is null) { Store.Log($"HLTB /api/{HltbEndpoint}: no match for '{term}' ({arr.Count} results)"); return 0; }
 
             g.HltbGameId = hit["game_id"]?.ToString() ?? g.HltbGameId;
             if (g.ManualHours) return 1;
-            double Hrs(string k) => double.TryParse(hit[k]?.ToString(), out var v) ? v / 3600.0 : 0;
-            double m = Hrs("comp_main"), x = Hrs("comp_plus"), f = Hrs("comp_100");
+            double m = Hours(hit, "comp_main"), x = Hours(hit, "comp_plus"), f = Hours(hit, "comp_100");
             if (m <= 0 && x <= 0 && f <= 0) return g.HltbGameId != null ? 1 : 0;
             g.Main = m; g.Extra = x; g.Full = f;
             return 1;
         }
-        catch (Exception ex) { Store.Log($"HLTB /api/{ep}: {ex.Message}"); return -1; }
+        catch (Exception ex) { Store.Log($"HLTB /api/{HltbEndpoint}: {ex.Message}"); return -1; }
     }
 
     // Read the times + extra details straight from the game's page (Next.js embeds them as JSON; raw-HTML scan as a backup).
@@ -565,11 +615,7 @@ public static class Meta
                 JsonNode? root = null;
                 try { root = JsonNode.Parse(m.Groups[1].Value); } catch { }
                 var node = root is null ? null : FindKey(root, "comp_main");
-                if (node != null)
-                {
-                    double Hrs(string k) => double.TryParse(node[k]?.ToString(), out var v) ? v / 3600.0 : 0;
-                    main = Hrs("comp_main"); plus = Hrs("comp_plus"); full = Hrs("comp_100");
-                }
+                if (node != null) { main = Hours(node, "comp_main"); plus = Hours(node, "comp_plus"); full = Hours(node, "comp_100"); }
                 if (root != null) ReadDetails(g, root);
             }
             if (main <= 0 && plus <= 0 && full <= 0)
@@ -611,12 +657,9 @@ public static class Assets
     const string TrailerFmt = "bv*[height<=480][vcodec^=avc1]+ba[ext=m4a]/bv*[height<=480][ext=mp4]+ba[ext=m4a]/b[height<=480]/bv*+ba/b";
     const string MusicFmt = "140/bestaudio[ext=m4a]";
 
-    static readonly HttpClient H = new() { Timeout = TimeSpan.FromMinutes(10) };
+    static readonly HttpClient H = Net.Client(TimeSpan.FromMinutes(10));
     static readonly SemaphoreSlim gate = new(1, 1);   // one download at a time
     static bool updated, denoTried, ffmpegTried;
-
-    static Assets() => H.DefaultRequestHeaders.UserAgent.ParseAdd(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36");
 
     static string Dir(string sub)
     {
@@ -724,28 +767,29 @@ public static class Assets
         bool changed = false;
         try
         {
-            var t = AdoptOne(g.TrailerFile, Dir("trailers"), Stem(g));
-            if (t is not null && t != g.TrailerFile) { g.TrailerFile = t; changed = true; }
-            var m = AdoptOne(g.MusicFile, Dir("music"), Stem(g));
-            if (m is not null && m != g.MusicFile) { g.MusicFile = m; changed = true; }
-            var gr = AdoptArt(g.Grid, Stem(g), "grid");
-            if (gr is not null && gr != g.Grid) { g.Grid = gr; changed = true; }
-            var hr = AdoptArt(g.Hero, Stem(g), "hero");
-            if (hr is not null && hr != g.Hero) { g.Hero = hr; changed = true; }
-            var lo = AdoptArt(g.Logo, Stem(g), "logo");
-            if (lo is not null && lo != g.Logo) { g.Logo = lo; changed = true; }
+            string stem = Stem(g), art = Dir("art");
+            void Fix(string? file, string dir, string name, Action<string> set)
+            {
+                var now = Adopt(file, dir, name);
+                if (now is not null && now != file) { set(now); changed = true; }
+            }
+            Fix(g.TrailerFile, Dir("trailers"), stem, v => g.TrailerFile = v);
+            Fix(g.MusicFile, Dir("music"), stem, v => g.MusicFile = v);
+            Fix(g.Grid, art, stem + "_grid", v => g.Grid = v);
+            Fix(g.Hero, art, stem + "_hero", v => g.Hero = v);
+            Fix(g.Logo, art, stem + "_logo", v => g.Logo = v);
         }
         catch (Exception ex) { Store.Log("Adopt media failed: " + ex.Message); }
         return changed;
     }
 
-    // Returns the title-named path for an existing art file (or the original when it can't be moved).
-    static string? AdoptArt(string? file, string stem, string kind)
+    // Returns the title-named path for an existing media/art file (or the original when it can't be moved).
+    static string? Adopt(string? file, string dir, string name)
     {
         if (file is null || !File.Exists(file)) return file;
         var ext = System.IO.Path.GetExtension(file);
         if (string.IsNullOrWhiteSpace(ext)) return file;
-        var target = System.IO.Path.Combine(Dir("art"), stem + "_" + kind + ext);
+        var target = System.IO.Path.Combine(dir, name + ext);
         if (string.Equals(file, target, StringComparison.OrdinalIgnoreCase)) return file;
         try
         {
@@ -753,24 +797,7 @@ public static class Assets
             File.Move(file, target);
             return target;
         }
-        catch (Exception ex) { Store.Log("Adopt art failed: " + ex.Message); return file; }
-    }
-
-    // Returns the title-named path for an existing media file (or the original when it can't be renamed).
-    static string? AdoptOne(string? file, string dir, string stem)
-    {
-        if (file is null || !File.Exists(file)) return file;
-        var ext = System.IO.Path.GetExtension(file);
-        if (string.IsNullOrWhiteSpace(ext)) return file;
-        var target = System.IO.Path.Combine(dir, stem + ext);
-        if (string.Equals(file, target, StringComparison.OrdinalIgnoreCase)) return file;
-        try
-        {
-            if (File.Exists(target)) { File.Delete(file); return target; }  // same title-named file already there
-            File.Move(file, target);
-            return target;
-        }
-        catch (Exception ex) { Store.Log("Adopt rename failed: " + ex.Message); return file; }
+        catch (Exception ex) { Store.Log("Adopt failed: " + ex.Message); return file; }
     }
 
     // Removes media/art files no game claims any more (left behind by removals, renames, failed downloads).
@@ -858,7 +885,7 @@ public static class Assets
                 g.TrailerFile = await SteamTrailer(g);
                 foreach (var q in new[] { "official game trailer", "game trailer" })
                     if (g.TrailerFile is null)
-                        g.TrailerFile = await Yt($"ytsearch3:{Clean(g.Name)} {q}", dir, stem, TrailerFmt,
+                        g.TrailerFile = await Yt($"ytsearch3:{NoQuotes(g.Name)} {q}", dir, stem, TrailerFmt,
                                                  "duration>10 & duration<600", 60);
             }
             Store.Log($"Trailer for '{g.Name}': {g.TrailerFile ?? "NOT FOUND"}");
@@ -919,7 +946,7 @@ public static class Assets
             {
                 foreach (var q in new[] { "main theme OST", "soundtrack theme" })
                     if (g.MusicFile is null)
-                        g.MusicFile = await Yt($"ytsearch3:{Clean(g.Name)} {q}", dir, stem, MusicFmt,
+                        g.MusicFile = await Yt($"ytsearch3:{NoQuotes(g.Name)} {q}", dir, stem, MusicFmt,
                                                "duration>45 & duration<420", 15);
                 g.MusicFile ??= await Itunes(g);
             }
@@ -961,7 +988,7 @@ public static class Assets
     }
 
     // ---- yt-dlp + deno (YouTube needs a JavaScript runtime now); both auto-downloaded into %AppData%\Lumen\bin ----
-    static string Clean(string s) => s.Replace("\"", "").Trim();
+    static string NoQuotes(string s) => s.Replace("\"", "").Trim();
 
     static string? Find(string dir, string stem)
     {

@@ -7,6 +7,11 @@
         FontFamily="Segoe UI Variable Text, Segoe UI">
 
     <Window.Resources>
+        <!-- Shared easing for the template animations below. -->
+        <CubicEase x:Key="EaseOut" EasingMode="EaseOut"/>
+        <BackEase x:Key="EaseSettle" EasingMode="EaseOut" Amplitude="0.3"/>
+
+        <!-- Round glass button: brightens and swells a touch under the pointer. -->
         <Style x:Key="Icon" TargetType="Button">
             <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets"/>
             <Setter Property="FontSize" Value="15"/>
@@ -18,12 +23,39 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="b" CornerRadius="20" Background="{DynamicResource Glass}"
-                                BorderBrush="{DynamicResource GlassLine}" BorderThickness="1" Opacity=".85">
+                                BorderBrush="{DynamicResource GlassLine}" BorderThickness="1" Opacity=".85"
+                                RenderTransformOrigin="0.5,0.5">
+                            <Border.RenderTransform>
+                                <ScaleTransform x:Name="Sc"/>
+                            </Border.RenderTransform>
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="b" Property="Opacity" Value="1"/>
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="b" Storyboard.TargetProperty="Opacity"
+                                                             To="1" Duration="0:0:0.14"/>
+                                            <DoubleAnimation Storyboard.TargetName="Sc" Storyboard.TargetProperty="ScaleX"
+                                                             To="1.08" Duration="0:0:0.2" EasingFunction="{StaticResource EaseOut}"/>
+                                            <DoubleAnimation Storyboard.TargetName="Sc" Storyboard.TargetProperty="ScaleY"
+                                                             To="1.08" Duration="0:0:0.2" EasingFunction="{StaticResource EaseOut}"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.EnterActions>
+                                <Trigger.ExitActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="b" Storyboard.TargetProperty="Opacity"
+                                                             To=".85" Duration="0:0:0.2"/>
+                                            <DoubleAnimation Storyboard.TargetName="Sc" Storyboard.TargetProperty="ScaleX"
+                                                             To="1" Duration="0:0:0.24" EasingFunction="{StaticResource EaseOut}"/>
+                                            <DoubleAnimation Storyboard.TargetName="Sc" Storyboard.TargetProperty="ScaleY"
+                                                             To="1" Duration="0:0:0.24" EasingFunction="{StaticResource EaseOut}"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.ExitActions>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -40,13 +72,37 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <!-- The theme accent as before: faint at rest, more solid the more active it gets. -->
-                        <Border x:Name="b" CornerRadius="8" Background="{DynamicResource PlayAccent}" Padding="30,11">
+                        <!-- The theme accent: faint at rest, more solid the more active it gets. -->
+                        <Border x:Name="b" CornerRadius="8" Background="{DynamicResource PlayAccent}" Padding="30,11"
+                                RenderTransformOrigin="0.5,0.5">
+                            <Border.RenderTransform>
+                                <ScaleTransform x:Name="Sc"/>
+                            </Border.RenderTransform>
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="b" Property="Background" Value="{DynamicResource PlayAccentHover}"/>
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="Sc" Storyboard.TargetProperty="ScaleX"
+                                                             To="1.04" Duration="0:0:0.2" EasingFunction="{StaticResource EaseOut}"/>
+                                            <DoubleAnimation Storyboard.TargetName="Sc" Storyboard.TargetProperty="ScaleY"
+                                                             To="1.04" Duration="0:0:0.2" EasingFunction="{StaticResource EaseOut}"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.EnterActions>
+                                <Trigger.ExitActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="Sc" Storyboard.TargetProperty="ScaleX"
+                                                             To="1" Duration="0:0:0.24" EasingFunction="{StaticResource EaseOut}"/>
+                                            <DoubleAnimation Storyboard.TargetName="Sc" Storyboard.TargetProperty="ScaleY"
+                                                             To="1" Duration="0:0:0.24" EasingFunction="{StaticResource EaseOut}"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.ExitActions>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="b" Property="Background" Value="{DynamicResource PlayAccentDown}"/>
@@ -58,7 +114,6 @@
         </Style>
 
         <Style x:Key="StatV" TargetType="TextBlock">
-            <!-- Sized/weighted like the metadata values so the play time reads as part of the metadata -->
             <Setter Property="FontSize" Value="13"/>
             <Setter Property="Foreground" Value="{DynamicResource Fg}"/>
         </Style>
@@ -67,15 +122,15 @@
             <Setter Property="Foreground" Value="{DynamicResource FgDim}"/>
         </Style>
 
+        <!-- A cover tile keeps its slot: the selected game is simply bigger (settling with a small
+             overshoot), and hovering a not-yet-selected one lifts it a little, so neither pushes its
+             neighbours along. -->
         <Style TargetType="ListBoxItem">
             <Setter Property="Margin" Value="5,0"/>
             <Setter Property="Height" Value="222"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ListBoxItem">
-                        <!-- The tile keeps its slot: the selected game is simply bigger, and hovering a
-                             not-yet-selected one pops it the same way, so neither pushes its
-                             neighbours along. -->
                         <Border x:Name="B" CornerRadius="13" BorderThickness="3" BorderBrush="Transparent"
                                 VerticalAlignment="Bottom" RenderTransformOrigin="0.5,1">
                             <Border.RenderTransform>
@@ -93,9 +148,9 @@
                                     <BeginStoryboard>
                                         <Storyboard>
                                             <DoubleAnimation Storyboard.TargetName="Sel" Storyboard.TargetProperty="ScaleX"
-                                                             To="1.07" Duration="0:0:0.2"/>
+                                                             To="1.07" Duration="0:0:0.38" EasingFunction="{StaticResource EaseSettle}"/>
                                             <DoubleAnimation Storyboard.TargetName="Sel" Storyboard.TargetProperty="ScaleY"
-                                                             To="1.07" Duration="0:0:0.2"/>
+                                                             To="1.07" Duration="0:0:0.38" EasingFunction="{StaticResource EaseSettle}"/>
                                         </Storyboard>
                                     </BeginStoryboard>
                                 </Trigger.EnterActions>
@@ -103,15 +158,15 @@
                                     <BeginStoryboard>
                                         <Storyboard>
                                             <DoubleAnimation Storyboard.TargetName="Sel" Storyboard.TargetProperty="ScaleX"
-                                                             To="1" Duration="0:0:0.2"/>
+                                                             To="1" Duration="0:0:0.28" EasingFunction="{StaticResource EaseOut}"/>
                                             <DoubleAnimation Storyboard.TargetName="Sel" Storyboard.TargetProperty="ScaleY"
-                                                             To="1" Duration="0:0:0.2"/>
+                                                             To="1" Duration="0:0:0.28" EasingFunction="{StaticResource EaseOut}"/>
                                         </Storyboard>
                                     </BeginStoryboard>
                                 </Trigger.ExitActions>
                             </Trigger>
-                            <!-- Hover pop, but only while the tile is not the selected one, so hovering the
-                                 selection never scales it further (which would push it over the pane's top). -->
+                            <!-- Hover lift, only while the tile is not the selected one, so hovering the
+                                 selection never scales it further. -->
                             <MultiTrigger>
                                 <MultiTrigger.Conditions>
                                     <Condition Property="IsMouseOver" Value="True"/>
@@ -122,9 +177,9 @@
                                     <BeginStoryboard>
                                         <Storyboard>
                                             <DoubleAnimation Storyboard.TargetName="Pop" Storyboard.TargetProperty="ScaleX"
-                                                             To="1.05" Duration="0:0:0.15"/>
+                                                             To="1.05" Duration="0:0:0.2" EasingFunction="{StaticResource EaseOut}"/>
                                             <DoubleAnimation Storyboard.TargetName="Pop" Storyboard.TargetProperty="ScaleY"
-                                                             To="1.05" Duration="0:0:0.15"/>
+                                                             To="1.05" Duration="0:0:0.2" EasingFunction="{StaticResource EaseOut}"/>
                                         </Storyboard>
                                     </BeginStoryboard>
                                 </MultiTrigger.EnterActions>
@@ -132,9 +187,9 @@
                                     <BeginStoryboard>
                                         <Storyboard>
                                             <DoubleAnimation Storyboard.TargetName="Pop" Storyboard.TargetProperty="ScaleX"
-                                                             To="1" Duration="0:0:0.18"/>
+                                                             To="1" Duration="0:0:0.26" EasingFunction="{StaticResource EaseOut}"/>
                                             <DoubleAnimation Storyboard.TargetName="Pop" Storyboard.TargetProperty="ScaleY"
-                                                             To="1" Duration="0:0:0.18"/>
+                                                             To="1" Duration="0:0:0.26" EasingFunction="{StaticResource EaseOut}"/>
                                         </Storyboard>
                                     </BeginStoryboard>
                                 </MultiTrigger.ExitActions>
@@ -151,7 +206,7 @@
                 <Rectangle RadiusX="10" RadiusY="10" Fill="{DynamicResource Card}"/>
                 <Rectangle RadiusX="10" RadiusY="10">
                     <Rectangle.Fill>
-                        <ImageBrush ImageSource="{Binding Grid}" Stretch="UniformToFill"/>
+                        <ImageBrush ImageSource="{Binding GridArt}" Stretch="UniformToFill"/>
                     </Rectangle.Fill>
                 </Rectangle>
                 <TextBlock Text="{Binding Name}" TextWrapping="Wrap" TextAlignment="Center" VerticalAlignment="Center"
@@ -195,156 +250,174 @@
         <!-- Hero -->
         <Grid x:Name="HeroGrid" Grid.Row="0" ClipToBounds="True">
             <Image x:Name="Hero" Stretch="UniformToFill"/>
-            <Image x:Name="Hero2" Stretch="UniformToFill" Opacity="0"/>
+            <!-- Hero2 is the incoming banner of the crossfade; it also drifts in from a hair larger,
+                 which hides the last frame of the swap and reads as one smooth move. -->
+            <Image x:Name="Hero2" Stretch="UniformToFill" Opacity="0" RenderTransformOrigin="0.5,0.5">
+                <Image.RenderTransform>
+                    <ScaleTransform x:Name="HeroZoom" ScaleX="1.04" ScaleY="1.04"/>
+                </Image.RenderTransform>
+            </Image>
             <Border x:Name="ScrimH" IsHitTestVisible="False"/>
             <Border x:Name="ScrimV" IsHitTestVisible="False"/>
 
             <!-- InfoFit holds the info block at its natural size, so font sizes are the same for every game and
                  change only with the interface scale (Settings). Its limits are set in SizeTrailer(). -->
             <Grid x:Name="InfoFit" HorizontalAlignment="Left" ClipToBounds="True"
-                     VerticalAlignment="Bottom" Margin="56,0,0,36">
-            <StackPanel x:Name="InfoPanel" HorizontalAlignment="Left" VerticalAlignment="Bottom">
-                <StackPanel.RenderTransform>
-                    <TranslateTransform x:Name="InfoTr"/>
-                </StackPanel.RenderTransform>
-                <!-- Title: fixed-size box; the logo (or the game's name, when there is no logo) is
-                     scaled to fit inside it, so every game's title occupies the same space and never
-                     spills over. -->
-                <Grid x:Name="TitleBox" MaxWidth="440" MaxHeight="250" HorizontalAlignment="Left" Margin="0,0,0,18">
-                    <Grid HorizontalAlignment="Left" VerticalAlignment="Bottom" MaxWidth="440" MaxHeight="250">
-                        <StackPanel>
-                            <Image x:Name="Logo" HorizontalAlignment="Left" Stretch="Uniform"/>
-                            <TextBlock x:Name="TitleText" FontSize="40" FontWeight="SemiBold" TextWrapping="Wrap" MaxWidth="380"
-                                       FontFamily="Segoe UI Variable Display, Segoe UI" Foreground="{DynamicResource Fg}"/>
-                        </StackPanel>
-                    </Grid>
-                </Grid>
+                  VerticalAlignment="Bottom" Margin="56,0,0,36">
+                <StackPanel x:Name="InfoPanel" HorizontalAlignment="Left" VerticalAlignment="Bottom">
+                    <!-- InfoBody contains everything that changes when a game changes (title + metadata);
+                         it is the only part that fades and rises, so the play button never blinks along. -->
+                    <StackPanel x:Name="InfoBody">
+                        <StackPanel.RenderTransform>
+                            <TranslateTransform x:Name="InfoShift"/>
+                        </StackPanel.RenderTransform>
 
-                <!-- Extra HowLongToBeat details: play time, then two metadata columns, the description
-                     filling the last column, and "additional content" (DLC) spanning the metadata columns last -->
-                <Grid x:Name="MetaCard" Margin="20,0,0,18" Visibility="Collapsed" HorizontalAlignment="Left">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-
-                    <!-- play time: first metadata row, so the description can start level with it -->
-                    <StackPanel x:Name="TimeRow" Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
-                                Orientation="Horizontal" Margin="0,0,24,10">
-                        <StackPanel Margin="0,0,40,0">
-                            <TextBlock Text="Main story" Style="{StaticResource StatL}"/>
-                            <TextBlock x:Name="StatMain" Style="{StaticResource StatV}"/>
-                        </StackPanel>
-                        <StackPanel Margin="0,0,40,0">
-                            <TextBlock Text="Main + extras" Style="{StaticResource StatL}"/>
-                            <TextBlock x:Name="StatExtra" Style="{StaticResource StatV}"/>
-                        </StackPanel>
-                        <StackPanel Margin="0,0,0,0">
-                            <TextBlock Text="Completionist" Style="{StaticResource StatL}"/>
-                            <TextBlock x:Name="StatFull" Style="{StaticResource StatV}"/>
-                        </StackPanel>
-                    </StackPanel>
-
-                    <StackPanel x:Name="MetaGenresRow" Grid.Row="1" Grid.Column="0" Margin="0,0,24,7">
-                        <TextBlock Text="Genres" Style="{StaticResource StatL}"/>
-                        <TextBlock x:Name="MetaGenres" FontSize="13" MaxWidth="260" TextWrapping="Wrap" Foreground="{DynamicResource Fg}"/>
-                    </StackPanel>
-                    <StackPanel x:Name="MetaDevRow" Grid.Row="1" Grid.Column="1" Margin="0,0,0,7">
-                        <TextBlock Text="Developer" Style="{StaticResource StatL}"/>
-                        <TextBlock x:Name="MetaDev" FontSize="13" MaxWidth="260" TextWrapping="Wrap" Foreground="{DynamicResource Fg}"/>
-                    </StackPanel>
-                    <StackPanel x:Name="MetaPubRow" Grid.Row="2" Grid.Column="0" Margin="0,0,24,0">
-                        <TextBlock Text="Publisher" Style="{StaticResource StatL}"/>
-                        <TextBlock x:Name="MetaPub" FontSize="13" MaxWidth="260" TextWrapping="Wrap" Foreground="{DynamicResource Fg}"/>
-                    </StackPanel>
-                    <StackPanel x:Name="MetaReleaseRow" Grid.Row="2" Grid.Column="1">
-                        <TextBlock Text="Release" Style="{StaticResource StatL}"/>
-                        <TextBlock x:Name="MetaRelease" FontSize="13" MaxWidth="260" TextWrapping="Wrap" Foreground="{DynamicResource Fg}"/>
-                    </StackPanel>
-
-                    <!-- description: its own last column, starting level with the play time. The box is a
-                         fixed size for every game and every window size (7 lines); anything longer scrolls
-                         inside it, and the scrollbar only appears when there is more text than fits.
-                         The right padding keeps the text clear of that scrollbar. -->
-                    <ScrollViewer x:Name="DescCard" Grid.Row="0" Grid.Column="2" Grid.RowSpan="4"
-                                  Margin="20,0,0,0" Width="340" Height="140" VerticalAlignment="Top"
-                                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
-                                  Padding="0,0,16,0">
-                        <TextBlock x:Name="DescText" TextWrapping="Wrap" FontSize="13" LineHeight="20"
-                                   LineStackingStrategy="BlockLineHeight" Foreground="{DynamicResource FgDim}"/>
-                    </ScrollViewer>
-
-                    <StackPanel x:Name="DlcBlock" Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2"
-                                Grid.IsSharedSizeScope="True"
-                                Margin="0,10,0,0" Visibility="Collapsed">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" SharedSizeGroup="DlcName"/>
-                                <ColumnDefinition Width="Auto" MinWidth="48" SharedSizeGroup="DlcMain"/>
-                                <ColumnDefinition Width="Auto" MinWidth="48" SharedSizeGroup="DlcExtra"/>
-                                <ColumnDefinition Width="Auto" MinWidth="48" SharedSizeGroup="DlcFull"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Additional Content" FontSize="11" Margin="0,0,10,0"
-                                       MaxWidth="180" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource FgDim}"/>
-                            <TextBlock Grid.Column="1" Text="Main" FontSize="11" HorizontalAlignment="Left"
-                                       Foreground="{DynamicResource FgDim}"/>
-                            <TextBlock Grid.Column="2" Text="Main+" FontSize="11" HorizontalAlignment="Left"
-                                       Foreground="{DynamicResource FgDim}"/>
-                            <TextBlock Grid.Column="3" Text="100%" FontSize="11" HorizontalAlignment="Left"
-                                       Foreground="{DynamicResource FgDim}"/>
+                        <!-- Title: fixed-size box; the logo (or the game's name, when there is no logo) is
+                             scaled to fit inside it, so every game's title occupies the same space. -->
+                        <Grid x:Name="TitleBox" MaxWidth="440" MaxHeight="250" HorizontalAlignment="Left" Margin="0,0,0,18">
+                            <Grid HorizontalAlignment="Left" VerticalAlignment="Bottom" MaxWidth="440" MaxHeight="250">
+                                <StackPanel>
+                                    <Image x:Name="Logo" HorizontalAlignment="Left" Stretch="Uniform"/>
+                                    <TextBlock x:Name="TitleText" FontSize="40" FontWeight="SemiBold" TextWrapping="Wrap" MaxWidth="380"
+                                               FontFamily="Segoe UI Variable Display, Segoe UI" Foreground="{DynamicResource Fg}"/>
+                                </StackPanel>
+                            </Grid>
                         </Grid>
-                        <ScrollViewer x:Name="DlcScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,12,0">
-                        <ItemsControl x:Name="DlcList">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Grid Margin="0,3,0,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto" SharedSizeGroup="DlcName"/>
-                                            <ColumnDefinition Width="Auto" MinWidth="48" SharedSizeGroup="DlcMain"/>
-                                            <ColumnDefinition Width="Auto" MinWidth="48" SharedSizeGroup="DlcExtra"/>
-                                            <ColumnDefinition Width="Auto" MinWidth="48" SharedSizeGroup="DlcFull"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="12" Margin="0,0,10,0"
-                                                   MaxWidth="180" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource Fg}"/>
-                                        <TextBlock Grid.Column="1" Text="{Binding MainH}" FontSize="12"
-                                                   HorizontalAlignment="Left" Foreground="{DynamicResource Fg}"/>
-                                        <TextBlock Grid.Column="2" Text="{Binding ExtraH}" FontSize="12"
-                                                   HorizontalAlignment="Left" Foreground="{DynamicResource Fg}"/>
-                                        <TextBlock Grid.Column="3" Text="{Binding FullH}" FontSize="12"
-                                                   HorizontalAlignment="Left" Foreground="{DynamicResource Fg}"/>
-                                    </Grid>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                        </ScrollViewer>
+
+                        <!-- Extra HowLongToBeat details: play time, then two metadata columns, the description
+                             filling the last column, and "additional content" (DLC) spanning the metadata columns last.
+                             It rises in a beat after the title. -->
+                        <Grid x:Name="MetaCard" Margin="20,0,0,18" Visibility="Collapsed" HorizontalAlignment="Left">
+                            <Grid.RenderTransform>
+                                <TranslateTransform x:Name="MetaShift"/>
+                            </Grid.RenderTransform>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <!-- play time: first metadata row, so the description can start level with it -->
+                            <StackPanel x:Name="TimeRow" Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
+                                        Orientation="Horizontal" Margin="0,0,24,10">
+                                <StackPanel Margin="0,0,40,0">
+                                    <TextBlock Text="Main story" Style="{StaticResource StatL}"/>
+                                    <TextBlock x:Name="StatMain" Style="{StaticResource StatV}"/>
+                                </StackPanel>
+                                <StackPanel Margin="0,0,40,0">
+                                    <TextBlock Text="Main + extras" Style="{StaticResource StatL}"/>
+                                    <TextBlock x:Name="StatExtra" Style="{StaticResource StatV}"/>
+                                </StackPanel>
+                                <StackPanel>
+                                    <TextBlock Text="Completionist" Style="{StaticResource StatL}"/>
+                                    <TextBlock x:Name="StatFull" Style="{StaticResource StatV}"/>
+                                </StackPanel>
+                            </StackPanel>
+
+                            <StackPanel x:Name="MetaGenresRow" Grid.Row="1" Grid.Column="0" Margin="0,0,24,7">
+                                <TextBlock Text="Genres" Style="{StaticResource StatL}"/>
+                                <TextBlock x:Name="MetaGenres" FontSize="13" MaxWidth="260" TextWrapping="Wrap" Foreground="{DynamicResource Fg}"/>
+                            </StackPanel>
+                            <StackPanel x:Name="MetaDevRow" Grid.Row="1" Grid.Column="1" Margin="0,0,0,7">
+                                <TextBlock Text="Developer" Style="{StaticResource StatL}"/>
+                                <TextBlock x:Name="MetaDev" FontSize="13" MaxWidth="260" TextWrapping="Wrap" Foreground="{DynamicResource Fg}"/>
+                            </StackPanel>
+                            <StackPanel x:Name="MetaPubRow" Grid.Row="2" Grid.Column="0" Margin="0,0,24,0">
+                                <TextBlock Text="Publisher" Style="{StaticResource StatL}"/>
+                                <TextBlock x:Name="MetaPub" FontSize="13" MaxWidth="260" TextWrapping="Wrap" Foreground="{DynamicResource Fg}"/>
+                            </StackPanel>
+                            <StackPanel x:Name="MetaReleaseRow" Grid.Row="2" Grid.Column="1">
+                                <TextBlock Text="Release" Style="{StaticResource StatL}"/>
+                                <TextBlock x:Name="MetaRelease" FontSize="13" MaxWidth="260" TextWrapping="Wrap" Foreground="{DynamicResource Fg}"/>
+                            </StackPanel>
+
+                            <!-- description: its own last column, starting level with the play time. The box is a
+                                 fixed size for every game and every window size (7 lines); anything longer scrolls
+                                 inside it, and the scrollbar only appears when there is more text than fits.
+                                 The right padding keeps the text clear of that scrollbar. -->
+                            <ScrollViewer x:Name="DescCard" Grid.Row="0" Grid.Column="2" Grid.RowSpan="4"
+                                          Margin="20,0,0,0" Width="340" Height="140" VerticalAlignment="Top"
+                                          VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                                          Padding="0,0,16,0">
+                                <TextBlock x:Name="DescText" TextWrapping="Wrap" FontSize="13" LineHeight="20"
+                                           LineStackingStrategy="BlockLineHeight" Foreground="{DynamicResource FgDim}"/>
+                            </ScrollViewer>
+
+                            <StackPanel x:Name="DlcBlock" Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2"
+                                        Grid.IsSharedSizeScope="True"
+                                        Margin="0,10,0,0" Visibility="Collapsed">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" SharedSizeGroup="DlcName"/>
+                                        <ColumnDefinition Width="Auto" MinWidth="48" SharedSizeGroup="DlcMain"/>
+                                        <ColumnDefinition Width="Auto" MinWidth="48" SharedSizeGroup="DlcExtra"/>
+                                        <ColumnDefinition Width="Auto" MinWidth="48" SharedSizeGroup="DlcFull"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Additional Content" FontSize="11" Margin="0,0,10,0"
+                                               MaxWidth="180" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource FgDim}"/>
+                                    <TextBlock Grid.Column="1" Text="Main" FontSize="11" HorizontalAlignment="Left"
+                                               Foreground="{DynamicResource FgDim}"/>
+                                    <TextBlock Grid.Column="2" Text="Main+" FontSize="11" HorizontalAlignment="Left"
+                                               Foreground="{DynamicResource FgDim}"/>
+                                    <TextBlock Grid.Column="3" Text="100%" FontSize="11" HorizontalAlignment="Left"
+                                               Foreground="{DynamicResource FgDim}"/>
+                                </Grid>
+                                <ScrollViewer x:Name="DlcScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,12,0">
+                                    <ItemsControl x:Name="DlcList">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid Margin="0,3,0,0">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto" SharedSizeGroup="DlcName"/>
+                                                        <ColumnDefinition Width="Auto" MinWidth="48" SharedSizeGroup="DlcMain"/>
+                                                        <ColumnDefinition Width="Auto" MinWidth="48" SharedSizeGroup="DlcExtra"/>
+                                                        <ColumnDefinition Width="Auto" MinWidth="48" SharedSizeGroup="DlcFull"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="12" Margin="0,0,10,0"
+                                                               MaxWidth="180" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource Fg}"/>
+                                                    <TextBlock Grid.Column="1" Text="{Binding MainH}" FontSize="12"
+                                                               HorizontalAlignment="Left" Foreground="{DynamicResource Fg}"/>
+                                                    <TextBlock Grid.Column="2" Text="{Binding ExtraH}" FontSize="12"
+                                                               HorizontalAlignment="Left" Foreground="{DynamicResource Fg}"/>
+                                                    <TextBlock Grid.Column="3" Text="{Binding FullH}" FontSize="12"
+                                                               HorizontalAlignment="Left" Foreground="{DynamicResource Fg}"/>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </StackPanel>
+                        </Grid>
                     </StackPanel>
-                </Grid>
-                <Button x:Name="PlayBtn" Style="{StaticResource Pill}" Click="Play_Click">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Text="&#xE768;" Margin="0,2,10,0"/>
-                        <TextBlock x:Name="PlayLabel" Text="Play"/>
-                    </StackPanel>
-                </Button>
-            </StackPanel>
+                    <Button x:Name="PlayBtn" Style="{StaticResource Pill}" Click="Play_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Text="&#xE768;" Margin="0,2,10,0"/>
+                            <TextBlock x:Name="PlayLabel" Text="Play"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
             </Grid>
 
-            <!-- Status + controller hint -->
+            <!-- Status line (top-left) -->
             <StackPanel x:Name="StatusPanel" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="56,24,0,0">
                 <TextBlock x:Name="Status" FontSize="13" TextWrapping="Wrap" Foreground="{DynamicResource FgDim}"/>
-                <TextBlock x:Name="PadHint" FontSize="13" TextWrapping="Wrap" Margin="0,4,0,0" Visibility="Collapsed"
-                           Text="&#x25C0; &#x25B6; Browse    &#x25B2; &#x25BC; Description    START Play    A Play Trailer    Y Show Trailer    X Mute Trailer    B Back"
-                           Foreground="{DynamicResource FgDim}"/>
             </StackPanel>
 
             <!-- Top-right buttons -->
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,20,24,0">
+            <StackPanel x:Name="TopBar" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,20,24,0">
+                <!-- Controller hints: right beside the round buttons -->
+                <TextBlock x:Name="PadHint" FontSize="13" TextWrapping="Wrap" TextAlignment="Right" VerticalAlignment="Center"
+                           Margin="0,0,16,0" Visibility="Collapsed"
+                           Text="SELECT Grid    START Play    Trailer:    A Play    Y Show    X Mute"
+                           Foreground="{DynamicResource FgDim}"/>
+                <Button x:Name="GridBtn" Style="{StaticResource Icon}" Content="&#xE80F;" ToolTip="All games (SELECT / G)"
+                        Click="Nav_Toolbar_Click" Margin="0,0,8,0"/>
                 <Button x:Name="TrBtn" Style="{StaticResource Icon}" Content="&#xE714;" ToolTip="Show trailer (Y)"
                         Click="TrailerBox_Click" Margin="0,0,8,0"/>
                 <Button x:Name="FsBtn" Style="{StaticResource Icon}" Content="&#xE740;" ToolTip="Fullscreen (F11)"
@@ -381,8 +454,9 @@
                        HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource FgDim}"/>
         </Grid>
 
-        <!-- Shelf: the plain tinted pane, with a faint glow in the artwork's own colour pooling
-             along its top edge. -->
+        <!-- Shelf: the tinted pane that holds the cover row. It never changes size: the all-games
+             grid is a separate pane (GridPane, below) that slides over the whole page, so the banner and
+             the info block are never resized or moved. -->
         <Border x:Name="Shelf" Grid.Row="1" Padding="40,0,40,22" ClipToBounds="True"
                 BorderBrush="{DynamicResource GlassLine}" BorderThickness="0,1,0,0">
             <Grid>
@@ -418,5 +492,65 @@
 
         <MediaElement x:Name="Music" Grid.Row="1" Width="0" Height="0" LoadedBehavior="Manual"
                       UnloadedBehavior="Manual" Volume="0" MediaEnded="Music_Ended" MediaFailed="Music_Failed"/>
+
+        <!-- Dim behind the sliding grid pane. Only visible while the pane is moving (once it has
+             arrived it covers the page); a click on the part still showing closes the pane. -->
+        <Border x:Name="NavDim" Grid.RowSpan="2" Background="#000000" Opacity="0" IsHitTestVisible="False"
+                MouseLeftButtonUp="Nav_Close_Click"/>
+
+        <!-- All games: a full-page pane that slides up over the banner, the info block and the shelf
+             without moving any of them. Parked below the window (and Hidden, but still laid out so its
+             covers are ready) until it is opened. -->
+        <Grid x:Name="GridPane" Grid.RowSpan="2" Visibility="Hidden">
+            <Grid.RenderTransform>
+                <TranslateTransform x:Name="PaneShift"/>
+            </Grid.RenderTransform>
+
+            <!-- soft shadow along the pane's leading edge -->
+            <Rectangle Height="40" VerticalAlignment="Top" Margin="0,-40,0,0" IsHitTestVisible="False">
+                <Rectangle.Fill>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                        <GradientStop Color="#00000000" Offset="0"/>
+                        <GradientStop Color="#48000000" Offset="1"/>
+                    </LinearGradientBrush>
+                </Rectangle.Fill>
+            </Rectangle>
+            <Border Background="{DynamicResource Bg}"/>
+            <Rectangle x:Name="PaneGlow" Height="220" VerticalAlignment="Top" IsHitTestVisible="False"/>
+
+            <Grid Margin="40,26,40,18">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <DockPanel Grid.Row="0" Margin="5,0,5,8">
+                    <Button DockPanel.Dock="Right" Style="{StaticResource Icon}" Content="&#xE711;"
+                            ToolTip="Back (Esc / G)" Click="NavDone_Click" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="NavHint" DockPanel.Dock="Right" FontSize="13" VerticalAlignment="Center"
+                               Margin="0,0,16,0" Visibility="Collapsed" Foreground="{DynamicResource FgDim}"
+                               Text="D-Pad Browse    A Select    B Back"/>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="All games" FontSize="24" FontWeight="SemiBold" Foreground="{DynamicResource Fg}"
+                                   FontFamily="Segoe UI Variable Display, Segoe UI"/>
+                    </StackPanel>
+                </DockPanel>
+
+                <ListBox x:Name="NavList" Grid.Row="1" Background="Transparent" BorderThickness="0"
+                         Padding="0,18,0,8"
+                         ItemTemplate="{StaticResource Cover}"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         ScrollViewer.CanContentScroll="False"
+                         SelectionChanged="Nav_Sel" PreviewMouseLeftButtonDown="Nav_Pick"
+                         PreviewMouseWheel="Nav_Wheel" KeyDown="Nav_Key">
+                    <ListBox.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel/>
+                        </ItemsPanelTemplate>
+                    </ListBox.ItemsPanel>
+                </ListBox>
+            </Grid>
+        </Grid>
     </Grid>
 </Window>
