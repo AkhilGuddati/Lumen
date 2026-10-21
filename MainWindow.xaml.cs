@@ -556,6 +556,7 @@ public partial class MainWindow : Window
             {
                 Trailer.Stop();
                 Trailer.Volume = 0;
+                Trailer.Source = null;        // an equal Uri would count as "no change" and not reload (e.g. after Close())
                 Trailer.Source = new Uri(file);
                 Trailer.Play();               // opens the file; Trailer_Opened then pauses on a poster frame
             }
@@ -578,7 +579,7 @@ public partial class MainWindow : Window
         Trailer.Stop(); Trailer.Close();
         Music.Stop(); Music.Close();
         trailerPath = null; trailerPlaying = false; musicPlaying = false;
-        musicFor = null;
+        musicFor = null; musicWant = null; musicWantFile = null;
         ShowTrailer(false);
     }
 
@@ -776,7 +777,14 @@ public partial class MainWindow : Window
         { musicWant = null; musicWantFile = null; return false; }
         if (musicFor is not null && musicFor.Id == g.Id && musicPlaying && Music.Source is not null
             && musicWant is null) return true;
-        if (musicWant == g && musicWantFile == u) return true;   // already on its way in
+        if (musicWant == g && musicWantFile == u)
+        {
+            // Already on its way in. Keep the outgoing theme fading: SetTargets may have just raised the
+            // target again (it runs more than once per selection), and a raised target would stop the
+            // volume from ever reaching silence, so the new theme would never be opened.
+            musicTarget = 0;
+            return true;
+        }
 
         musicWant = g;
         musicWantFile = u;
@@ -796,6 +804,7 @@ public partial class MainWindow : Window
         {
             Music.Stop();
             Music.Volume = 0;
+            Music.Source = null;             // an equal Uri would count as "no change" and not reload (e.g. after Close())
             Music.Source = new Uri(u);
             Music.Play();
             musicPlaying = true;
@@ -812,6 +821,7 @@ public partial class MainWindow : Window
     {
         Store.Log("Music playback failed: " + (e.ErrorException?.Message ?? "unknown"));
         musicPlaying = false; musicFor = null; musicTarget = 0;
+        musicWant = null; musicWantFile = null;
     }
 
     void Mute_Click(object s, RoutedEventArgs e) => ToggleMute();
